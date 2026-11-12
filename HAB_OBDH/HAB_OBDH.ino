@@ -1,10 +1,11 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.5                       */
+/* v1.6                       */
 /* 02/12/2020                 */
 /******************************/ 
-/* Transm 1x/ min             */
+/* Transm 1x/ 1min  20dB      */
+/* Transm 1x/ 10min 30dB      */
 /******************************/
 
 //bibliotecas necessarias
@@ -87,6 +88,7 @@ DATA MyData;
 byte Hundredths;
 uint8_t deviceCount = 0;
 byte min_ant;
+byte min_ant10;
 
 //funcao de espera inteligente
 static void smartdelay(unsigned long ms);
@@ -131,7 +133,7 @@ void setup() {
   // E32.SetAddressH(0);             // set the high address byte
   // E32.SetAddressL(0);             // set the low address byte
   // E32.SetChannel(17);             // set the channel (0-32 is pretty typical)
-  // E32.SetTransmitPower(3);        // set transmission power
+  // E32.SetTransmitPower(OPT_TP21);        // set transmission power
   // E32.SaveParameters(TEMPORARY);  // save the parameters to the EBYTE EEPROM, you can save temp if periodic changes are needed
      
   // CASO QUEIRA IMPRIMIR NA SERIAL OS PARAMETROS DE COMM
@@ -168,16 +170,32 @@ void loop(){ //programa principal
       while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
         //aguarda tempo para proxima transmissao
         EPS_aquisition();
+        delay(8000);
         smartdelay(2000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
         FIL_print();
-        //envia dados pelo COMM
-        if (MyData.Minute != min_ant)
+        
+        if (MyData.Minute != min_ant) //envia dados pelo COMM
           {
-          E32.SendStruct(&MyData, sizeof(MyData));
-          min_ant = MyData.Minute;
+          if (MyData.Minute >= min_ant10) //envia 30dB
+            {
+            E32.SetTransmitPower(OPT_TP30);        
+            E32.SaveParameters(TEMPORARY);  
+            delay (2000);
+            E32.SendStruct(&MyData, sizeof(MyData));
+            delay (2000);
+            E32.SetTransmitPower(OPT_TP21);        
+            E32.SaveParameters(TEMPORARY);  
+            min_ant = MyData.Minute;
+            min_ant10 = 10 * MyData.Minute;
+            }
+           else                          //envia 20dB
+            {            
+            E32.SendStruct(&MyData, sizeof(MyData));
+            min_ant = MyData.Minute;
+            }
           }
         MyData.CNT ++;
         }
