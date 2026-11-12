@@ -8,20 +8,20 @@ Arduino flight software for the high-altitude balloon on-board computer (OBC/OBD
 
 | Mission | Firmware |
 | --- | --- |
-| SAIRUS I | [v1.10](CHANGELOG.md#v110) |
-| SAIRUS II | [v2.7](CHANGELOG.md#v27) |
+| SAIRUS I | [v1.10](https://github.com/mariopin80/HAB_OBDH/releases/tag/v1.10) |
+| SAIRUS II | [v2.7](https://github.com/mariopin80/HAB_OBDH/releases/tag/v2.7) |
 
 Versions v3.0, v3.1 and v4.0 are experimental post-flight developments. The headers of v3.1 and v4.0 record their hardware test status as untested.
 
 ## Version history
 
-The [changelog](CHANGELOG.md) covers 23 sketches recovered from the original archive. Each entry identifies the original filename, links to the source and compares it with the preceding version. The Git history was reconstructed from the archived files. Dates in the changelog come from the sketch headers.
+The 23 sketches recovered from the original archive are available in [Releases](https://github.com/mariopin80/HAB_OBDH/releases). Each entry in the [changelog](CHANGELOG.md) identifies the original filename, links to the source and compares it with the preceding version. The Git history was reconstructed from the archived files. Dates in the changelog come from the sketch headers.
 
 The version labels follow the archived filenames. The initial sketch gained a version header and the labels in v1.5, v1.7b and v3.1 were corrected. The rest of each sketch was verified byte for byte against the archive.
 
 ## Open a sketch
 
-Use the source link for the version you want in the [changelog](CHANGELOG.md). To download its whole snapshot, choose **Code → Download ZIP** from that snapshot and open `HAB_OBDH/HAB_OBDH.ino` in the Arduino IDE. Use the Arduino board and core for the target OBDH hardware. The sketch on `main` is the v4.0 development version.
+Download **Source code (zip)** from the release you want, extract it and open `HAB_OBDH/HAB_OBDH.ino` in the Arduino IDE. Use the Arduino board and core for the target OBDH hardware. The sketch on `main` is the v4.0 development version.
 
 The sketches use `SoftwareSerial`, `TinyGPS`, the `EBYTE.h` E32 library, `OneWire`, `DallasTemperature`, `Adafruit_BMP085` and `SdFat`. Install `LowPower` for v1.7b, v1.8, v1.9 and v2.6 onward. v3.0 onward also uses the AVR core's `<avr/wdt.h>`. The v2.0.0 through v2.1 source names SdFat 2.1.0. For the E32, use the library that provides the archived sketch's `EBYTE` class and `SendStruct()` API.
 
