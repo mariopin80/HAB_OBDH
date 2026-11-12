@@ -1,8 +1,8 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v2.6 VOO                   */
-/* 07/03/2023                 */
+/* v2.7 VOO                   */
+/* 22/03/2023                 */
 /******************************/
 
 /***** bibliotecas necessarias *****/
@@ -180,7 +180,7 @@ void loop() {
     /******* operacao normal durante o dia *******/
     case OPER_1:{ 
       min_ant = MyData.Minute;
-      while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 22 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
+      while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 21 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
         smartdelay(2000);
         BMP_aquisition();
@@ -214,7 +214,7 @@ void loop() {
     /*********operacao normal durante a noite**********/
     case NOITE: {
       while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
-        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
+        LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
         smartdelay(2000);
         BMP_aquisition();
         EPS_aquisition();
@@ -233,7 +233,7 @@ void loop() {
     /**********operacao de seguranca (bateria baixa)**********/
     case SEGURANCA:{
      while(MyData.Vbat <= Vbat_min){
-        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
+        LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
         EPS_aquisition();
         }
       estado = INICIALIZACAO;
@@ -248,10 +248,10 @@ void loop() {
 static void smartdelay(unsigned long ms)
 {
   unsigned long start = millis();
-  do {
-    while (UART_GNSS.available())
+  while (millis() - start < ms){
+    if (UART_GNSS.available())
       gps.encode(UART_GNSS.read());
-  } while (millis() - start < ms);
+  } 
 }
 
 void TMP_aquisition() {
