@@ -1,12 +1,16 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.6                       */
-/* 02/12/2020                 */
+/* v1.7b                      */
+/* 05/12/2020                 */
 /******************************/ 
 /* Transm 1x/ 1min  20dB      */
 /* Transm 1x/ 10min 30dB      */
+/* Power Down                 */
 /******************************/
+/* VOLTIMETRO BATERIA OFF     */
+/******************************/
+
 
 //bibliotecas necessarias
 #include <SoftwareSerial.h>
@@ -17,6 +21,7 @@
 #include <Wire.h>
 #include <Adafruit_BMP085.h>
 #include <SdFat.h>
+#include <LowPower.h>
 
 //cria os possiveis estados de operacao
 enum Estados{INIC, OPER_D, OPER_N, SEGUR};
@@ -38,12 +43,10 @@ TinyGPS gps;
 #define seaLevelPressure_hPa 1016.00 //pressao no nivel do mar
 Adafruit_BMP085 bmp; 
 
-
 //define SD Card
 #define chipSelect 10  //SD Card CS
 SdFat sdCard; 
 SdFile meuArquivo;
-
 
 //define sensores de temperatura
 #define ONE_WIRE_BUS 3  //pino de dados
@@ -53,7 +56,6 @@ DallasTemperature sensors(&oneWire);
 //define portas analogicas para medir tensao
 #define AnalogVbat A0
 #define AnalogVpv A1
-
 
 // Struct para criar pacote de transmissao de dados
 struct DATA {
@@ -88,7 +90,7 @@ DATA MyData;
 byte Hundredths;
 uint8_t deviceCount = 0;
 byte min_ant;
-byte min_ant10;
+byte PWRDC;
 
 //funcao de espera inteligente
 static void smartdelay(unsigned long ms);
@@ -108,7 +110,7 @@ void operacao_voo();
 void setup() {
 
   //inicializa portas seriais
-  //Serial.begin(9600); //**FOR DEBUG ONLY**
+  //Serial.begin(9600); //**SOMENTE PARA TESTES**
   ESerial.begin(9600);
   serialGPS.begin(9600);
 
@@ -117,7 +119,7 @@ void setup() {
 
   //inicializa sensores de temperatura
   sensors.begin(); 
-  deviceCount = sensors.getDeviceCount();  // locate temperature sensors devices on the bus
+  deviceCount = sensors.getDeviceCount();  // localiza os sensores de temperatura
 
   //inicializa sensor de pressao atmosferica
   bmp.begin(); 
@@ -125,20 +127,7 @@ void setup() {
   // Inicializa SD Card e cria arquivo
   sdCard.begin(chipSelect,SPI_HALF_SPEED);  
   meuArquivo.open("teste3.txt" , O_RDWR | O_CREAT | O_AT_END);
-  
-  
- 
-  // CASO QUEIRA ALTERAR CONFIGURACOES DE COMM
-  // E32.SetAirDataRate(ADR_8K);     // change the air data rate
-  // E32.SetAddressH(0);             // set the high address byte
-  // E32.SetAddressL(0);             // set the low address byte
-  // E32.SetChannel(17);             // set the channel (0-32 is pretty typical)
-  // E32.SetTransmitPower(OPT_TP21);        // set transmission power
-  // E32.SaveParameters(TEMPORARY);  // save the parameters to the EBYTE EEPROM, you can save temp if periodic changes are needed
-     
-  // CASO QUEIRA IMPRIMIR NA SERIAL OS PARAMETROS DE COMM
-  // Transceiver.PrintParameters();
-  
+    
   MyData.CNT = 0;
 }
 
@@ -148,12 +137,11 @@ void loop(){ //programa principal
     
     /*******inicializacao do sistema********/
     case INIC:{  
-      
-      EPS_aquisition();
       smartdelay(3000);
+      EPS_aquisition();
       GPS_aquisition();      
       while(MyData.Sats < 4 && MyData.Sats > 40 && MyData.Vbat > 587){
-        smartdelay(5000);
+        smartdelay(10000);
         GPS_aquisition();
         EPS_aquisition();
         }
@@ -167,35 +155,37 @@ void loop(){ //programa principal
     /******* operacao normal durante o dia *******/
     case OPER_D:{ 
       min_ant = MyData.Minute;
+      E32.SetMode(MODE_POWERDOWN);
+      E32.SetTransmitPower(OPT_TP21);
+      E32.SaveParameters(TEMPORARY); 
       while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
-        //aguarda tempo para proxima transmissao
-        EPS_aquisition();
-        delay(8000);
-        smartdelay(2000);
-        TMP_aquisition();
+        delay (4000);
+        smartdelay(1000);
         BMP_aquisition();
+        EPS_aquisition();
         GPS_aquisition();
+        TMP_aquisition();
         FIL_print();
-        
         if (MyData.Minute != min_ant) //envia dados pelo COMM
           {
-          if (MyData.Minute >= min_ant10) //envia 30dB
+          E32.SetMode(MODE_NORMAL);
+          E32.SaveParameters(TEMPORARY);
+          if (MyData.Minute % 10 == 0) //transmite 30dB
             {
-            E32.SetTransmitPower(OPT_TP30);        
+            E32.SetTransmitPower(OPT_TP30); 
             E32.SaveParameters(TEMPORARY);  
-            delay (2000);
             E32.SendStruct(&MyData, sizeof(MyData));
-            delay (2000);
-            E32.SetTransmitPower(OPT_TP21);        
-            E32.SaveParameters(TEMPORARY);  
+            //delay (5000);
+            E32.SetTransmitPower(OPT_TP21); 
             min_ant = MyData.Minute;
-            min_ant10 = 10 * MyData.Minute;
             }
-           else                          //envia 20dB
+           else                          //transmite 20dB
             {            
             E32.SendStruct(&MyData, sizeof(MyData));
             min_ant = MyData.Minute;
             }
+          E32.SetMode(MODE_POWERDOWN);
+          E32.SaveParameters(TEMPORARY); 
           }
         MyData.CNT ++;
         }
@@ -208,19 +198,15 @@ void loop(){ //programa principal
     
     /*********operacao normal durante a noite**********/
     case OPER_N: {
-      
       while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > 587){
-        EPS_aquisition();
-        smartdelay(1000);
-        TMP_aquisition();
+        smartdelay(10000);
         BMP_aquisition();
+        EPS_aquisition();
         GPS_aquisition();
+        TMP_aquisition();
         FIL_print();
         MyData.CNT ++;
-        //aguarda tempo para proxima operacao
-        delay (29000);
         }
-      
       if(MyData.Vbat <= 587)
         estado = SEGUR;
         else 
@@ -230,20 +216,15 @@ void loop(){ //programa principal
     
     /**********operacao de seguranca (bateria baixa)**********/
     case SEGUR:{
-      
-      while(MyData.Vbat <= 587){
-        delay (30000);
+     while(MyData.Vbat <= 587){
+        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
         EPS_aquisition();
         }
       estado = INIC;
       break;
       }
-
-       
     }
   }
-
-
 
 //funcoes 
 
@@ -291,7 +272,7 @@ void GPS_aquisition(){
 
 void EPS_aquisition(){
 
-  MyData.Vbat = analogRead(AnalogVbat);
+  MyData.Vbat = 600; //analogRead(AnalogVbat); /*****ATENCAO******/
   MyData.Vpv = analogRead(AnalogVpv);
   
 }
