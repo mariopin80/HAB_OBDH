@@ -1,9 +1,13 @@
-/********  HAB_OBDH **********/
-/* IFSP_Boituva              */
-/* Prof. Mario Pin           */
-/* v1.2                      */
-/* 11/11/2020                */
-/*****************************/
+/********  HAB_OBDH ***********/
+/* IFSP_Boituva               */
+/* Prof. Mario Pin            */
+/* v1.3                       */
+/* 25/11/2020                 */
+/******************************/ 
+/* Debug OFF                  */
+/* Valor de tensao mínima def */
+/* Param. inicializacao def   */
+/******************************/
 
 //bibliotecas necessarias
 #include <SoftwareSerial.h>
@@ -141,86 +145,76 @@ void loop(){ //programa principal
   
   switch (estado){
     
-    //inicializacao do sistema
+    /*******inicializacao do sistema********/
     case INIC:{  
-      Serial.println("INIC");
+      
       EPS_aquisition();
       smartdelay(3000);
       GPS_aquisition();      
-      while(MyData.Sats < 2 && MyData.HDOP > 10 && MyData.Vbat > 9){
-        Serial.println("INIC.W");
+      while(MyData.Sats < 4 && MyData.Sats > 40 && MyData.Vbat > 587){
         smartdelay(5000);
         GPS_aquisition();
         EPS_aquisition();
         }
-      if(MyData.Vbat <= 9)
+      if(MyData.Vbat <= 587)
         estado = SEGUR;
         else 
         estado = OPER_D;
       break;
     }
     
-    //operacao normal durante o dia
+    /******* operacao normal durante o dia *******/
     case OPER_D:{ 
-      Serial.println("OPER_D");
-      Serial.println(MyData.Age);
-      while(/*MyData.Hour < 22 && MyData.Hour >= 11 && */MyData.Vbat > 9){
-        Serial.println("OPER_D.W");
-        Serial.println(MyData.Temp_BMP180);
+      
+      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
         //aguarda tempo para proxima transmissao
-        smartdelay(5000);
+        delay (9000);
+        EPS_aquisition();
+        smartdelay(1000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
-        EPS_aquisition();
         FIL_print();
         //envia dados pelo COMM
         E32.SendStruct(&MyData, sizeof(MyData));
         MyData.CNT ++;
-      }
-      if(MyData.Vbat <= 9)
+        }
+      if(MyData.Vbat <= 587)
         estado = SEGUR;
         else 
         estado = OPER_N;
       break;
     }
     
-    //operacao normal durante a noite
+    /*********operacao normal durante a noite**********/
     case OPER_N: {
-      Serial.println("OPER_N");
-      Serial.println(MyData.Age);
-      while((MyData.Hour >=22 || MyData.Hour < 11) && MyData.Vbat > 9){
-        Serial.println("OPER_N.W");
-        Serial.println(MyData.Age);
+      
+      while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > 587){
+        EPS_aquisition();
         smartdelay(1000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
-        EPS_aquisition();
         FIL_print();
         MyData.CNT ++;
-
         //aguarda tempo para proxima operacao
-        delay(1000);
-      }
-      if(MyData.Vbat <= 9)
+        delay (29000);
+        }
+      
+      if(MyData.Vbat <= 587)
         estado = SEGUR;
         else 
         estado = OPER_D;
       break;
     }
     
-    //operacao de seguranca (bateria baixa)
+    /**********operacao de seguranca (bateria baixa)**********/
     case SEGUR:{
-      Serial.println("SEGUR");
-      Serial.println(MyData.Age);
-      while(MyData.Vbat <= 9){
-        GPS_aquisition();
-        Serial.println("SEGUR.W");
-        Serial.println(MyData.Age);
+      
+      while(MyData.Vbat <= 587){
+        delay (30000);
         EPS_aquisition();
-        smartdelay(1000);
-      }
+        }
       estado = INIC;
       break;
       }
@@ -248,9 +242,9 @@ void TMP_aquisition(){
   sensors.requestTemperatures(); 
 
   // carrega dados dos sensores de temperatura
-  MyData.Temp1 = sensors.getTempCByIndex(1)*10;
-  MyData.Temp2 = sensors.getTempCByIndex(2)*10;
-  MyData.Temp3 = sensors.getTempCByIndex(3)*10;
+  MyData.Temp1 = sensors.getTempCByIndex(0)*10;
+  MyData.Temp2 = sensors.getTempCByIndex(1)*10;
+  MyData.Temp3 = sensors.getTempCByIndex(2)*10;
 }
 
 void BMP_aquisition(){
