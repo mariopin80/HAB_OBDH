@@ -1,8 +1,9 @@
-/********  HAB_OBDH ***********/
-/* IFSP_Boituva               */
-/* Prof. Mario Pin            */
-/* v1                         */
-/******************************/
+/********  HAB_OBDH **********/
+/* IFSP_Boituva              */
+/* Prof. Mario Pin           */
+/* v1.1                      */
+/* 05/11/2020                */
+/*****************************/
 
 //bibliotecas necessarias
 #include <SoftwareSerial.h>
@@ -46,14 +47,18 @@ SdFile meuArquivo;
 OneWire oneWire(ONE_WIRE_BUS); 
 DallasTemperature sensors(&oneWire);
 
+//define portas analogicas para medir tensao
+#define AnalogVbat A0
+#define AnalogVpv A1
+
 
 // Struct para criar pacote de transmissao de dados
 struct DATA {
   long Latitude;
   long Longitude;
-  float Altitude;
-  float Speed;
-  float Heading;
+  unsigned short Altitude;
+  unsigned short Speed;
+  unsigned short Heading;
   byte Hour;
   byte Minute;
   byte Second;
@@ -63,14 +68,14 @@ struct DATA {
   unsigned long Age;
   unsigned long HDOP;
   unsigned short Sats;
-  float Temp1;
-  float Temp2;
-  float Temp3;
-  float Temp_BMP180;
-  float Pressure;
-  float Baro_Alt;
-  float Vbat;
-  float Vpv;
+  short Temp1;
+  short Temp2;
+  short Temp3;
+  short Temp_BMP180;
+  long Pressure;
+  unsigned short Baro_Alt;
+  unsigned short Vbat;
+  unsigned short Vpv;
   };
 
 DATA MyData;
@@ -86,6 +91,7 @@ static void smartdelay(unsigned long ms);
 void TMP_aquisition();
 void BMP_aquisition();
 void GPS_aquisition();
+void EPS_aquisition();
 
 //funcao para gravar dados em arquivo
 void FIL_print();
@@ -96,7 +102,7 @@ void operacao_voo();
 void setup() {
 
   //inicializa portas seriais
-  //Serial.begin(9600); **FOR DEBUG ONLY**
+  Serial.begin(9600); //**FOR DEBUG ONLY**
   ESerial.begin(9600);
   serialGPS.begin(9600);
 
@@ -127,7 +133,7 @@ void setup() {
   // CASO QUEIRA IMPRIMIR NA SERIAL OS PARAMETROS DE COMM
   // Transceiver.PrintParameters();
   
-
+  
 }
 
 void loop(){ //programa principal
@@ -136,32 +142,44 @@ void loop(){ //programa principal
     
     //inicializacao do sistema
     case INIC:{  
-      
-      GPS_aquisition();
-      smartdelay(1000);      
-      while(MyData.Sats < 6 || MyData.HDOP > 10){
+      Serial.println("INIC");
+      Serial.println(MyData.Sats);
+      EPS_aquisition();
+      smartdelay(3000);
+      GPS_aquisition();      
+      while(MyData.Sats < 6 && MyData.HDOP > 10 && MyData.Vbat > 9){
+        Serial.println("INIC.W");
+        Serial.println(MyData.Sats);
         smartdelay(5000);
         GPS_aquisition();
-        
-      }
-      estado = OPER_D;
+        EPS_aquisition();
+        }
+      if(MyData.Vbat <= 9)
+        estado = SEGUR;
+        else 
+        estado = OPER_D;
       break;
     }
     
     //operacao normal durante o dia
     case OPER_D:{ 
-
+      Serial.println("OPER_D");
+      Serial.println(MyData.Sats);
       while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 9){
+        Serial.println("OPER_D.W");
+        Serial.println(MyData.Speed);
+        Serial.println(MyData.Altitude);
+        Serial.println(MyData.Heading);
+        Serial.println(sizeof(MyData));
+        //aguarda tempo para proxima transmissao
+        smartdelay(5000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
+        EPS_aquisition();
         FIL_print();
-
         //envia dados pelo COMM
-         E32.SendStruct(&MyData, sizeof(MyData));
-
-        //aguarda tempo para proxima transmissao
-        smartdelay(5000);
+        E32.SendStruct(&MyData, sizeof(MyData));
       }
       if(MyData.Vbat <= 9)
         estado = SEGUR;
@@ -172,16 +190,20 @@ void loop(){ //programa principal
     
     //operacao normal durante a noite
     case OPER_N: {
+      Serial.println("OPER_N");
+      Serial.println(MyData.Sats);
       while((MyData.Hour >=22 || MyData.Hour < 11) && MyData.Vbat > 9){
-      
+        Serial.println("OPER_N.W");
+        Serial.println(MyData.Sats);
+        smartdelay(1000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
+        EPS_aquisition();
         FIL_print();
 
         //aguarda tempo para proxima operacao
-        delay(14000);
-        smartdelay(1000);
+        delay(1000);
       }
       if(MyData.Vbat <= 9)
         estado = SEGUR;
@@ -191,12 +213,24 @@ void loop(){ //programa principal
     }
     
     //operacao de seguranca (bateria baixa)
-    case SEGUR:{ 
-/*****************TBD***********************/
-      break; 
+    case SEGUR:{
+      Serial.println("SEGUR");
+      Serial.println(MyData.Sats);
+      while(MyData.Vbat <= 9){
+        GPS_aquisition();
+        Serial.println("SEGUR.W");
+        Serial.println(MyData.Sats);
+        EPS_aquisition();
+        smartdelay(1000);
+      }
+      estado = INIC;
+      break;
+      }
+
+       
     }
   }
-}
+
 
 
 //funcoes 
@@ -216,15 +250,15 @@ void TMP_aquisition(){
   sensors.requestTemperatures(); 
 
   // carrega dados dos sensores de temperatura
-  MyData.Temp1 = sensors.getTempCByIndex(0);
-  MyData.Temp2 = sensors.getTempCByIndex(1);
-  MyData.Temp3 = sensors.getTempCByIndex(2);
+  MyData.Temp1 = sensors.getTempCByIndex(0)*10;
+  MyData.Temp2 = sensors.getTempCByIndex(1)*10;
+  MyData.Temp3 = sensors.getTempCByIndex(2)*10;
 }
 
 void BMP_aquisition(){
   
-  MyData.Pressure =  bmp.readPressure()/1000.0;                   //le valor de pressao atmosferica e converte para kPa
-  MyData.Temp_BMP180 = bmp.readTemperature();                     //le temperatura do barometro
+  MyData.Pressure =  bmp.readPressure();                          //le valor de pressao atmosferica e converte para kPa
+  MyData.Temp_BMP180 = bmp.readTemperature()*10;                  //le temperatura do barometro
   MyData.Baro_Alt = bmp.readAltitude(seaLevelPressure_hPa * 100); //le altitude barometrica em relacao ao valor de calibracao
 }
 
@@ -233,11 +267,21 @@ void GPS_aquisition(){
   //carrega dados de GPS
   gps.crack_datetime(&MyData.Year, &MyData.Month, &MyData.Day, &MyData.Hour, &MyData.Minute, &MyData.Second, &Hundredths, &MyData.Age);
   gps.get_position(&MyData.Latitude, &MyData.Longitude, &MyData.Age);
-  MyData.Altitude = gps.f_altitude();
-  MyData.Heading = gps.f_course();
+  MyData.Altitude = gps.altitude()/100;
+  if(gps.course() <= 36000)
+    MyData.Heading = gps.course()/100;
+  else 
+    MyData.Heading = 0;  
   MyData.Speed = gps.f_speed_kmph();
-  MyData.Sats = gps.satellites();
   MyData.HDOP = gps.hdop();
+  MyData.Sats = gps.satellites();
+}
+
+void EPS_aquisition(){
+
+  MyData.Vbat = analogRead(AnalogVbat);
+  MyData.Vpv = analogRead(AnalogVpv);
+  
 }
 
 void FIL_print(){
@@ -275,6 +319,12 @@ void FIL_print(){
   meuArquivo.print(MyData.Heading);
   meuArquivo.print(F(";"));
 
+  meuArquivo.print(MyData.HDOP);
+  meuArquivo.print(F(";"));
+
+  meuArquivo.print(MyData.Sats);
+  meuArquivo.print(F(";"));
+
   meuArquivo.print(MyData.Temp1);
   meuArquivo.print(F(";"));
   
@@ -292,6 +342,12 @@ void FIL_print(){
   
   meuArquivo.print(MyData.Baro_Alt);
   meuArquivo.println(F(";"));
+
+  meuArquivo.print(MyData.Vbat);
+  meuArquivo.print(F(";"));
+
+  meuArquivo.print(MyData.Vpv);
+  meuArquivo.print(F(";"));
     
   //compila arquivo
   meuArquivo.flush();
