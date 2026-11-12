@@ -1,12 +1,10 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.3                       */
-/* 25/11/2020                 */
+/* v1.4                       */
+/* 02/12/2020                 */
 /******************************/ 
-/* Debug OFF                  */
-/* Valor de tensao mínima def */
-/* Param. inicializacao def   */
+/* Transm 1x/ min             */
 /******************************/
 
 //bibliotecas necessarias
@@ -88,6 +86,7 @@ DATA MyData;
 //variaveis globais
 byte Hundredths;
 uint8_t deviceCount = 0;
+byte min_ant;
 
 //funcao de espera inteligente
 static void smartdelay(unsigned long ms);
@@ -168,16 +167,17 @@ void loop(){ //programa principal
       
       while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
         //aguarda tempo para proxima transmissao
-        delay (9000);
         EPS_aquisition();
-        smartdelay(1000);
+        smartdelay(2000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
         FIL_print();
         //envia dados pelo COMM
-        E32.SendStruct(&MyData, sizeof(MyData));
+        if (MyData.Minute != min_ant)
+          E32.SendStruct(&MyData, sizeof(MyData));
         MyData.CNT ++;
+        min_ant = MyData.Minute;
         }
       if(MyData.Vbat <= 587)
         estado = SEGUR;
