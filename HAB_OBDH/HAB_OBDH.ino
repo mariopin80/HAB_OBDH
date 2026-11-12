@@ -2,15 +2,13 @@
 /*    NAO TESTADO EM HARDWARE   */ 
 /*IFSP_Boituva                  */
 /* Prof. Mario Pin              */
-/* v3.1 Implantacao de watchdog */
+/* v4.0 Estados para subida     */
+/*descida e pouso               */
+/*otimização de funcoes         */
+/*watchdog timer                */
 /* 15/04/2026                   */
-/********** TO DO: **************/
-/* Implantar estados:           */
-/*  DESCIDA e POUSO             */
-/* Evitar travamento de         */
-/*  INICIALIZACAO sem GPS       */
-/*                              */
 /********************************/
+
 
 /***** bibliotecas necessarias *****/
 #include <Adafruit_BMP085.h>
@@ -182,6 +180,7 @@ void loop() {
   
   switch (estado){
     /*******inicializacao do sistema********/
+    
     case STARTUP: {  
       
       do {
@@ -191,7 +190,7 @@ void loop() {
         ALL_Data_aquisition();
         LoRa_LoPWR();
         watchdog_check(); 
-        } while (MyData.Sats < 4 && MyData.Vbat > Vbat_min);
+        } while (MyData.Sats < 4 && MyData.Vbat > Vbat_min); //verifica satélites GPS e tensão bateria
          
       if (MyData.Vbat <= Vbat_min) {
        estado = SAFE;
@@ -205,50 +204,116 @@ void loop() {
     /******* operacao normal durante a subida *******/
     case CLIMB:{ 
       
-      smartdelay(2000);
       min_ant = MyData.Minute;
       ultimo_millis = millis();
       
-      while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 21 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
+      while(estado == CLIMB) { 
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
         wdt_enable(WDTO_8S);
         smartdelay(2000);
         ALL_Data_aquisition();
         WDT_FIL = WD_SET;
         FIL_print();
-        if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
-          {
-          min_ant = MyData.Minute;
-          ultimo_millis = millis();
-          if (MyData.Minute % 10 == 0)   //transmite 30dB
-            {
-            LoRa_HiPWR();
-            }
-           else                          //transmite 20dB
-            {            
-            LoRa_LoPWR();
+        MyData.CNT++;
+
+        if (MyData.Vbat <= Vbat_min) { //verifica estado da bateria
+          estado = SAFE;
+        } 
+        else if (altitude_maxima_cm > 100000 && (altitude_maxima_cm - ((int32_t)MyData.Altitude * 100)) > 50000) { //verifica se está em descida
+          estado = DESCENT;
+        }
+        else if (MyData.Hour >= 21 || MyData.Hour < 11) { //verifica estado noturno
+          estado = NIGHT;
+        }
+        if (estado == CLIMB) {
+          if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) {
+            min_ant = MyData.Minute;
+            ultimo_millis = millis();
+            
+            if (MyData.Minute % 10 == 0) {
+              LoRa_HiPWR(); // Transmissão 30dBm (Alta Potência) a cada 10 min
+            } else {
+              LoRa_LoPWR(); // Transmissão 20dBm (Baixa Potência)
             }
           }
-        MyData.CNT ++;
-        watchdog_check();
         }
-      if(MyData.Vbat <= Vbat_min)
-        estado = SAFE;
-        else 
-        estado = NIGHT;
+        watchdog_check();
+      } 
       break;
     }
     /******* operacao normal durante a descida *******/
     case DESCENT:{
 
+      static uint8_t contador_pouso = 0; 
+      static uint16_t ultima_altitude_conhecida = 0;
+      min_ant = MyData.Minute;
+      ultimo_millis = millis();
+
+      while(estado == DESCENT) {
+        LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF); 
+        wdt_enable(WDTO_8S);
+        smartdelay(2000);
+        ALL_Data_aquisition();
+        WDT_FIL = WD_SET;
+        FIL_print();
+        MyData.CNT++;
+
+        if (MyData.Vbat <= Vbat_min) { //verifica estado da bateria
+          estado = SAFE;
+        } 
+        else if (MyData.Altitude < 3000 && abs(MyData.Altitude - ultima_altitude_conhecida) < 5) { //verifica se pousou
+          contador_pouso++;
+          if (contador_pouso >= 10) {
+            estado = LAND;
+          }
+        }
+        else {
+          contador_pouso = 0;
+          ultima_altitude_conhecida = MyData.Altitude;
+        }
+        if (estado == DESCENT && (MyData.Hour >= 21 || MyData.Hour < 11)) { //verifica periodo noturno
+          estado = NIGHT;
+        }
+        if (estado == DESCENT) {
+           // Transmite a cada 30 segundos ou mudança de minuto para não perder a sonda de vista
+           if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 30000) {
+              min_ant = MyData.Minute;
+              ultimo_millis = millis();
+              LoRa_HiPWR(); 
+           }
+        }
+        watchdog_check();
+      }
       break;
     }
 
     /******* operacao normal apos o pouso *******/
     case LAND:{
+      uint8_t ciclos_land = 0; // Contador local para controle de transmissão
 
+      while(estado == LAND) {
+        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF); 
+        wdt_enable(WDTO_8S);
+        smartdelay(2000);
+        ALL_Data_aquisition();
+        ciclos_land++;
+
+        if (ciclos_land >= 30) {
+          LoRa_HiPWR(); 
+          ciclos_land = 0; 
+        }
+        
+        if (MyData.Vbat <= Vbat_min) { //verifica estado da bateria
+          estado = SAFE;
+        } 
+        else if (MyData.Hour >= 21 || MyData.Hour < 11) { //verifica periodo noturno
+          estado = NIGHT;
+        }
+        watchdog_check();
+      }
       break;
     }
+   
     /*********operacao normal durante a noite**********/
     case NIGHT: {
       smartdelay(2000);
@@ -262,10 +327,10 @@ void loop() {
         MyData.CNT ++;
         watchdog_check();
         }
-      if(MyData.Vbat <= Vbat_min)
+      if(MyData.Vbat <= Vbat_min) //verifica estado da bateria
         estado = SAFE;
         else 
-        estado = CLIMB;
+        estado = LAND;
       break;
     }
     
@@ -380,16 +445,16 @@ void EPS_aquisition() {
 
 void LoRa_HiPWR() {
   UART_COMM.write(Hi_P, sizeof(Hi_P)); delay(100);
-  digitalWrite(4, LOW); digitalWrite(5, LOW); delay(100);
+  digitalWrite(LORA_M0, LOW); digitalWrite(LORA_M1, LOW); delay(100);
   E32.SendStruct(&MyData, sizeof(MyData));
-  digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
+  digitalWrite(LORA_M0, HIGH); digitalWrite(LORA_M1, HIGH); delay(100);
 }
 
 void LoRa_LoPWR() {
   UART_COMM.write(Lo_P, sizeof(Lo_P)); delay(100);
-  digitalWrite(4, LOW); digitalWrite(5, LOW); delay(100);
+  digitalWrite(LORA_M0, LOW); digitalWrite(LORA_M1, LOW); delay(100);
   E32.SendStruct(&MyData, sizeof(MyData));
-  digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
+  digitalWrite(LORA_M0, HIGH); digitalWrite(LORA_M1, HIGH); delay(100);
 }
 
 void FIL_print() {
