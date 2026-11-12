@@ -1,8 +1,8 @@
 /********  HAB_OBDH **********/
 /* IFSP_Boituva              */
 /* Prof. Mario Pin           */
-/* v1.1                      */
-/* 05/11/2020                */
+/* v1.2                      */
+/* 11/11/2020                */
 /*****************************/
 
 //bibliotecas necessarias
@@ -32,7 +32,7 @@ EBYTE E32(&ESerial, 4, 5, -1);
 TinyGPS gps;
 
 //define sensor de pressao
-#define seaLevelPressure_hPa 1013.25 //pressao no nivel do mar
+#define seaLevelPressure_hPa 1016.00 //pressao no nivel do mar
 Adafruit_BMP085 bmp; 
 
 
@@ -76,6 +76,7 @@ struct DATA {
   unsigned short Baro_Alt;
   unsigned short Vbat;
   unsigned short Vpv;
+  unsigned long CNT;
   };
 
 DATA MyData;
@@ -133,7 +134,7 @@ void setup() {
   // CASO QUEIRA IMPRIMIR NA SERIAL OS PARAMETROS DE COMM
   // Transceiver.PrintParameters();
   
-  
+  MyData.CNT = 0;
 }
 
 void loop(){ //programa principal
@@ -143,13 +144,11 @@ void loop(){ //programa principal
     //inicializacao do sistema
     case INIC:{  
       Serial.println("INIC");
-      Serial.println(MyData.Sats);
       EPS_aquisition();
       smartdelay(3000);
       GPS_aquisition();      
-      while(MyData.Sats < 6 && MyData.HDOP > 10 && MyData.Vbat > 9){
+      while(MyData.Sats < 2 && MyData.HDOP > 10 && MyData.Vbat > 9){
         Serial.println("INIC.W");
-        Serial.println(MyData.Sats);
         smartdelay(5000);
         GPS_aquisition();
         EPS_aquisition();
@@ -164,13 +163,10 @@ void loop(){ //programa principal
     //operacao normal durante o dia
     case OPER_D:{ 
       Serial.println("OPER_D");
-      Serial.println(MyData.Sats);
-      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 9){
+      Serial.println(MyData.Age);
+      while(/*MyData.Hour < 22 && MyData.Hour >= 11 && */MyData.Vbat > 9){
         Serial.println("OPER_D.W");
-        Serial.println(MyData.Speed);
-        Serial.println(MyData.Altitude);
-        Serial.println(MyData.Heading);
-        Serial.println(sizeof(MyData));
+        Serial.println(MyData.Temp_BMP180);
         //aguarda tempo para proxima transmissao
         smartdelay(5000);
         TMP_aquisition();
@@ -180,6 +176,7 @@ void loop(){ //programa principal
         FIL_print();
         //envia dados pelo COMM
         E32.SendStruct(&MyData, sizeof(MyData));
+        MyData.CNT ++;
       }
       if(MyData.Vbat <= 9)
         estado = SEGUR;
@@ -191,16 +188,17 @@ void loop(){ //programa principal
     //operacao normal durante a noite
     case OPER_N: {
       Serial.println("OPER_N");
-      Serial.println(MyData.Sats);
+      Serial.println(MyData.Age);
       while((MyData.Hour >=22 || MyData.Hour < 11) && MyData.Vbat > 9){
         Serial.println("OPER_N.W");
-        Serial.println(MyData.Sats);
+        Serial.println(MyData.Age);
         smartdelay(1000);
         TMP_aquisition();
         BMP_aquisition();
         GPS_aquisition();
         EPS_aquisition();
         FIL_print();
+        MyData.CNT ++;
 
         //aguarda tempo para proxima operacao
         delay(1000);
@@ -215,11 +213,11 @@ void loop(){ //programa principal
     //operacao de seguranca (bateria baixa)
     case SEGUR:{
       Serial.println("SEGUR");
-      Serial.println(MyData.Sats);
+      Serial.println(MyData.Age);
       while(MyData.Vbat <= 9){
         GPS_aquisition();
         Serial.println("SEGUR.W");
-        Serial.println(MyData.Sats);
+        Serial.println(MyData.Age);
         EPS_aquisition();
         smartdelay(1000);
       }
@@ -250,9 +248,9 @@ void TMP_aquisition(){
   sensors.requestTemperatures(); 
 
   // carrega dados dos sensores de temperatura
-  MyData.Temp1 = sensors.getTempCByIndex(0)*10;
-  MyData.Temp2 = sensors.getTempCByIndex(1)*10;
-  MyData.Temp3 = sensors.getTempCByIndex(2)*10;
+  MyData.Temp1 = sensors.getTempCByIndex(1)*10;
+  MyData.Temp2 = sensors.getTempCByIndex(2)*10;
+  MyData.Temp3 = sensors.getTempCByIndex(3)*10;
 }
 
 void BMP_aquisition(){
@@ -287,6 +285,9 @@ void EPS_aquisition(){
 void FIL_print(){
 
   //imprime dados em arquivo no SD Card
+  meuArquivo.print(MyData.CNT);
+  meuArquivo.print(F(";"));
+  
   meuArquivo.print(MyData.Day);
   meuArquivo.print(F("/"));
   meuArquivo.print(MyData.Month);
@@ -341,13 +342,13 @@ void FIL_print(){
   meuArquivo.print(F(";"));
   
   meuArquivo.print(MyData.Baro_Alt);
-  meuArquivo.println(F(";"));
+  meuArquivo.print(F(";"));
 
   meuArquivo.print(MyData.Vbat);
   meuArquivo.print(F(";"));
 
   meuArquivo.print(MyData.Vpv);
-  meuArquivo.print(F(";"));
+  meuArquivo.println(F(";"));
     
   //compila arquivo
   meuArquivo.flush();
