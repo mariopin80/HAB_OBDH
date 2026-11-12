@@ -1,11 +1,18 @@
-/********  HAB_OBDH ***********/
-/* IFSP_Boituva               */
-/* Prof. Mario Pin            */
-/* v2.7 VOO                   */
-/* 22/03/2023                 */
-/******************************/
+/********  HAB_OBDH *************/
+/* IFSP_Boituva                 */
+/* Prof. Mario Pin              */
+/* v3.0 Implantacao de watchdog */
+/* 09/04/2026                   */
+/********** TO DO: **************/
+/* Implantar estados:           */
+/*  DESCIDA e POUSO             */
+/* Evitar travamento de         */
+/*  INICIALIZACAO sem GPS       */
+/* Beacon em SEGURACA           */
+/********************************/
 
 /***** bibliotecas necessarias *****/
+#include <avr/wdt.h>
 #include <SoftwareSerial.h>
 #include <TinyGPS.h>
 #include <EBYTE.h>
@@ -13,6 +20,10 @@
 #include <Adafruit_BMP085.h>
 #include <SdFat.h>
 #include <LowPower.h>
+
+/***** define flags de watchdog *****/
+#define WD_SET 0xAA
+#define WD_RST 0x55
 
 /***** define as portas da COMM *****/
 #define LORA_M0 4
@@ -37,7 +48,7 @@
 
 /***** define constantes do sistema *****/
 #define Vbat_min 390                  //tensao minima da bateria 5,3V
-#define seaLevelPressure_hPa 1013.00  //pressao no nivel do mar
+#define seaLevelPressure_hPa 1013.00  //pressao no nivel do mar @@@Ajustar na data de lançamento@@@
 
 /***** cria os possiveis estados de operacao *****/
 enum Estados {INICIALIZACAO, OPER_1, NOITE, SEGURANCA};
@@ -97,6 +108,13 @@ struct DATA {
 
 DATA MyData;
 
+/***** variaveis de watchdog *****/
+volatile byte WDT_TMP;
+volatile byte WDT_BMP;
+volatile byte WDT_GPS;
+volatile byte WDT_EPS;
+volatile byte WDT_FIL;
+
 /***** variaveis globais *****/
 byte Hundredths;
 uint8_t deviceCount;
@@ -104,8 +122,8 @@ byte min_ant;
 unsigned long ultimo_millis = millis();
 
 /***** array de configuração da COMM *****/
-byte Lo_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x47};
-byte Hi_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x44};
+byte Lo_P[] = {0xC2, 0x00, 0x00, 0x18, 0xA, 0x47};
+byte Hi_P[] = {0xC2, 0x00, 0x00, 0x18, 0xA, 0x44};
 
 /***** funcoes de transmissao *****/
 void LoRa_LoPWR();
@@ -126,6 +144,16 @@ void FIL_print();
 /***** inicializacao dos subsistemas *****/
 void setup() {
 
+  /***** Garante que as flags iniciam em estado seguro *****/
+  WDT_TMP = WD_RST;
+  WDT_BMP = WD_RST;
+  WDT_GPS = WD_RST;
+  WDT_EPS = WD_RST;
+  WDT_FIL = WD_RST;
+
+  /***** Ativa o Watchdog de Hardware *****/
+  wdt_enable(WDTO_8S);
+  
   /***** inicializa portas seriais *****/
   UART_COMM.begin(9600);
   UART_GNSS.begin(9600);
@@ -140,7 +168,7 @@ void setup() {
   delay(1000);
   deviceCount = sensortemp.getDeviceCount();  // localiza os sensores de temperatura
 
-  /***** seleciona referencia de tensão externa 3,3V *****/
+  /***** seleciona referencia de tensão externa 3,3V - SOMENTE PLACA MODIFICADA*****/
   analogReference(EXTERNAL);
 
   /***** inicializa sensor de pressao atmosferica *****/
@@ -160,15 +188,33 @@ void loop() {
     
     /*******inicializacao do sistema********/
     case INICIALIZACAO:{  
-      smartdelay(3000);
-      EPS_aquisition();
-      GPS_aquisition();      
-      while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
+      smartdelay(2000);
+      
+      WDT_GPS = WD_SET;
+      WDT_EPS = WD_SET;
+
+      GPS_aquisition();
+      EPS_aquisition();      
+      while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){ 
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
+        
+        wdt_enable(WDTO_8S); 
+        
         smartdelay(2000);
-        GPS_aquisition();
+        
+        // Seta as flags antes de ler
+        WDT_BMP = WD_SET;
+        WDT_EPS = WD_SET;
+        WDT_GPS = WD_SET;
+        WDT_TMP = WD_SET;
+        
+        BMP_aquisition();
         EPS_aquisition();
+        GPS_aquisition();
         TMP_aquisition();
+        
+        // ADICIONADO: Reseta o Watchdog enquanto espera o GPS!
+        watchdog_check(); 
         }
       if(MyData.Vbat <= Vbat_min)
         estado = SEGURANCA;
@@ -179,14 +225,26 @@ void loop() {
     
     /******* operacao normal durante o dia *******/
     case OPER_1:{ 
+      smartdelay(2000);
       min_ant = MyData.Minute;
+      ultimo_millis = millis();
       while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 21 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
+
+        wdt_enable(WDTO_8S);
+        
         smartdelay(2000);
-        BMP_aquisition();
-        EPS_aquisition();
-        GPS_aquisition();
+        
+        WDT_TMP = WD_SET;
+        WDT_BMP = WD_SET;
+        WDT_GPS = WD_SET;
+        WDT_EPS = WD_SET;
+        WDT_FIL = WD_SET;
+        
         TMP_aquisition();
+        BMP_aquisition();
+        GPS_aquisition();
+        EPS_aquisition();
         FIL_print();
         if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
           {
@@ -203,6 +261,7 @@ void loop() {
           ultimo_millis = millis(); 
           }
         MyData.CNT ++;
+        watchdog_check();
         }
       if(MyData.Vbat <= Vbat_min)
         estado = SEGURANCA;
@@ -213,15 +272,27 @@ void loop() {
     
     /*********operacao normal durante a noite**********/
     case NOITE: {
-      while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
+      smartdelay(2000);
+      while((MyData.Hour >= 21 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
+
+        wdt_enable(WDTO_8S);
+        
         smartdelay(2000);
-        BMP_aquisition();
-        EPS_aquisition();
-        GPS_aquisition();
+        
+        WDT_TMP = WD_SET;
+        WDT_BMP = WD_SET;
+        WDT_GPS = WD_SET;
+        WDT_EPS = WD_SET;
+        WDT_FIL = WD_SET;
+        
         TMP_aquisition();
+        BMP_aquisition();
+        GPS_aquisition();
+        EPS_aquisition();
         FIL_print();
         MyData.CNT ++;
+        watchdog_check();
         }
       if(MyData.Vbat <= Vbat_min)
         estado = SEGURANCA;
@@ -232,11 +303,18 @@ void loop() {
     
     /**********operacao de seguranca (bateria baixa)**********/
     case SEGURANCA:{
+     smartdelay(2000);
      while(MyData.Vbat <= Vbat_min){
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
+
+        wdt_enable(WDTO_8S);
+        
+        WDT_EPS = WD_SET;
+
         EPS_aquisition();
+        watchdog_check();
         }
-      estado = INICIALIZACAO;
+      estado = OPER_1;
       break;
       }
     }
@@ -262,6 +340,8 @@ void TMP_aquisition() {
   MyData.Temp1 = sensortemp.getTempCByIndex(0) * 10;
   MyData.Temp2 = sensortemp.getTempCByIndex(1) * 10;
   MyData.Temp3 = sensortemp.getTempCByIndex(2) * 10;
+
+  WDT_TMP = WD_RST;
 }
 
 void BMP_aquisition() {
@@ -269,6 +349,8 @@ void BMP_aquisition() {
   MyData.Pressure =  baro.readPressure();                          //le valor de pressao atmosferica e converte para kPa
   MyData.Temp_BMP180 = baro.readTemperature() * 10;                //le temperatura do barometro
   MyData.Baro_Alt = baro.readAltitude(seaLevelPressure_hPa * 100); //le altitude barometrica em relacao ao valor de calibracao
+
+  WDT_BMP = WD_RST;
 }
 
 void GPS_aquisition() {
@@ -284,6 +366,8 @@ void GPS_aquisition() {
   MyData.Speed = gps.f_speed_kmph();
   MyData.HDOP = gps.hdop();
   MyData.Sats = gps.satellites();
+
+  WDT_GPS = WD_RST;
 }
 
 void EPS_aquisition() {
@@ -291,6 +375,7 @@ void EPS_aquisition() {
   MyData.Vbat = analogRead(AnalogVbat);
   MyData.Vpv  = analogRead(AnalogVpv);
 
+  WDT_EPS = WD_RST;
 }
 
 void LoRa_HiPWR() {
@@ -377,4 +462,18 @@ void FIL_print() {
 
   /***** grava no cartao SD *****/
   LogFILE.sync();
+
+  WDT_FIL = WD_RST;
+}
+void watchdog_check() {
+  // Exige a assinatura exata de sucesso (0x55) de todas as flags.
+  // Protege contra travamentos e corrupção de memória por radiação cósmica (SEU).
+  if (WDT_TMP == WD_RST && 
+      WDT_BMP == WD_RST && 
+      WDT_GPS == WD_RST && 
+      WDT_EPS == WD_RST && 
+      WDT_FIL == WD_RST) {
+        
+    wdt_reset(); // "Alimenta o cão" - zera o temporizador de hardware
+  }
 }
