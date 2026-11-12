@@ -1,7 +1,7 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v2.2                       */
+/* v2.3 DEBUG                 */
 /* 07/02/2023                 */
 /******************************/
 
@@ -72,7 +72,7 @@ struct DATA {
   long Latitude;
   long Longitude;
   unsigned short Altitude;
-  unsigned short Speed;
+  float Speed;
   unsigned short Heading;
   byte Hour;
   byte Minute;
@@ -122,27 +122,39 @@ void EPS_aquisition();
 
 /***** funcao para gravar dados em arquivo *****/
 void FIL_print();
+void UART_print();
 
 /***** inicializacao dos subsistemas *****/
 void setup() {
 
   /***** inicializa portas seriais *****/
-  //Serial.begin(9600); //#### SOMENTE PARA TESTES #####
+  Serial.begin(115200); //#### SOMENTE PARA TESTES #####
   UART_COMM.begin(9600);
   UART_GNSS.begin(9600);
 
+  Serial.println("Inicializando radio.");
+  
   /***** inicializa COMM *****/
   E32.init();
   digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
   UART_COMM.write(Lo_P, sizeof(Lo_P)); delay(100);
 
+  Serial.println("Inicializando sensores de temperatura.");
+  
   /***** inicializa sensores de temperatura *****/
   sensortemp.begin();
   delay(1000);
   deviceCount = sensortemp.getDeviceCount();  // localiza os sensores de temperatura
 
+  /***** seleciona referencia externa *****/
+  analogReference(EXTERNAL);
+
+  Serial.println("Inicializando braometro.");
+  
   /***** inicializa sensor de pressao atmosferica *****/
   baro.begin();
+
+  Serial.println("Inicializando cartao SD.");
 
   /***** inicializa SD Card e cria arquivo *****/
   SDcard.begin(CS_SD, SPI_HALF_SPEED);
@@ -153,92 +165,18 @@ void setup() {
 
 /************** PROGRAMA PRINCIPAL **************/
 void loop() {
+  smartdelay(5000);
+  BMP_aquisition();
+  EPS_aquisition();
+  GPS_aquisition();
+  TMP_aquisition();
+  FIL_print();
+  UART_print();
 
-  switch (estado) {
-
-    /********** inicializacao do sistema ********/
-    case INICIALIZACAO: {
-        smartdelay(3000);
-        EPS_aquisition();
-        GPS_aquisition();
-        //Aguarda pelo menos 6 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
-        while ((MyData.Sats < 6 || MyData.Sats > 40) && MyData.Vbat > Vbat_min) {
-          smartdelay(10000);
-          GPS_aquisition();
-          EPS_aquisition();
-          TMP_aquisition();
-        }
-        if (MyData.Vbat <= Vbat_min)
-          estado = SEGURANCA;
-        else
-          estado = OPER_1;
-        break;
-      }
-
-    /********** OPERACAO DIURNA NORMAL ****************/
-    case OPER_1: {
-        min_ant = MyData.Minute;
-        //se hora entre 22 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
-        while (MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min) {
-          smartdelay(3000);
-          BMP_aquisition();
-          EPS_aquisition();
-          GPS_aquisition();
-          TMP_aquisition();
-          FIL_print();
-          //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
-          if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000)
-          {
-            if (MyData.Minute % 10 == 0) //transmite 30dB em intervalos de 10 minutos
-            {
-              void LoRa_HiPWR();
-              min_ant = MyData.Minute;
-            }
-            else                        //transmite 20dB a cada minuto
-            {
-              void LoRa_LoPWR();
-              min_ant = MyData.Minute;
-            }
-            ultimo_millis = millis();
-          }
-          MyData.CNT ++;
-        }
-        if (MyData.Vbat <= Vbat_min)
-          estado = SEGURANCA;
-        else
-          estado = NOTURNO;
-        break;
-      }
-
-    /********** OPERACAO NOTURNA ****************/
-    case NOTURNO: {
-        while ((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min) {
-          delay(9000);
-          smartdelay(1000);
-          BMP_aquisition();
-          EPS_aquisition();
-          GPS_aquisition();
-          TMP_aquisition();
-          FIL_print();
-          MyData.CNT ++;
-        }
-        if (MyData.Vbat <= Vbat_min)
-          estado = SEGURANCA;
-        else
-          estado = OPER_1;
-        break;
-      }
-
-    /********** MODO DE SEGURANCA ***********/
-    case SEGURANCA: {
-        while (MyData.Vbat <= Vbat_min) {
-          delay (10000);
-          EPS_aquisition();
-        }
-        estado = INICIALIZACAO;
-        break;
-      }
-  }
+  MyData.CNT = MyData.CNT+1;
+  
+  LoRa_LoPWR();
+             
 }
 
 /********* Funcoes auxiliares *******************/
@@ -375,4 +313,44 @@ void FIL_print() {
 
   /***** grava no cartao SD *****/
   LogFILE.sync();
+}
+
+void UART_print(){
+  Serial.println(F("------------------------------------------"));
+  Serial.println(MyData.CNT);
+  
+  Serial.print(MyData.Day);
+  Serial.print(F("/"));
+  Serial.print(MyData.Month);
+  Serial.print(F("/"));
+  Serial.println(MyData.Year);
+  
+  Serial.print(MyData.Hour);
+  Serial.print(F(":"));
+  Serial.print(MyData.Minute);
+  Serial.print(F(":"));
+  Serial.println(MyData.Second);
+  
+  Serial.print(F("Age:")); Serial.println(MyData.Age);
+
+  Serial.print(F("Lat:")); Serial.println(MyData.Latitude);
+  Serial.print(F("Lon:")); Serial.println(MyData.Longitude);
+  Serial.print(F("Alt:")); Serial.println(MyData.Altitude);
+
+  Serial.print(F("SPD:")); Serial.println(MyData.Speed);
+  Serial.print(F("HDG:")); Serial.println(MyData.Heading);
+
+  Serial.print(F("HDOP:")); Serial.println(MyData.HDOP);
+  Serial.print(F("Sats:")); Serial.println(MyData.Sats);
+
+  Serial.print(F("Temp1:")); Serial.println(MyData.Temp1);
+  Serial.print(F("Temp2:")); Serial.println(MyData.Temp2);
+  Serial.print(F("Temp3:")); Serial.println(MyData.Temp3);
+
+  Serial.print(F("Tbar:")); Serial.println(MyData.Temp_BMP180);
+  Serial.print(F("Pres:")); Serial.println(MyData.Pressure);
+  Serial.print(F("AltB:")); Serial.println(MyData.Baro_Alt);
+
+  Serial.print(F("Vbt:")); Serial.println(MyData.Vbat);
+  Serial.print(F("Vpv:")); Serial.println(MyData.Vpv);
 }
