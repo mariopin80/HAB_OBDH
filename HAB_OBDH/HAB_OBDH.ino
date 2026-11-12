@@ -1,15 +1,15 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.8                       */
-/* 29/12/2020                 */
+/* v1.9                       */
+/* 13/01/2021                 */
 /******************************/ 
 /* Transm 1x/ 1min  20dB      */
 /* Transm 1x/ 10min 30dB      */
 /* TX_Power Down              */
+/* Watchdog transm. OPER_D    */
 /******************************/
-/* VOLTIMETRO BATERIA OFF     */
-/******************************/
+
 
 
 //bibliotecas necessarias
@@ -57,6 +57,9 @@ DallasTemperature sensors(&oneWire);
 #define AnalogVbat A0
 #define AnalogVpv A1
 
+//define minima tensao da bateria
+#define Vbat_min 410
+
 // Struct para criar pacote de transmissao de dados
 struct DATA {
   long Latitude;
@@ -91,6 +94,7 @@ byte Hundredths;
 uint8_t deviceCount = 0;
 byte min_ant;
 byte PWRDC;
+unsigned long ultimo_millis;
 
 //funcao de espera inteligente
 static void smartdelay(unsigned long ms);
@@ -140,12 +144,12 @@ void loop(){ //programa principal
       smartdelay(3000);
       EPS_aquisition();
       GPS_aquisition();      
-      while(MyData.Sats < 4 && MyData.Sats > 40 && MyData.Vbat > 587){
+      while(MyData.Sats < 4 && MyData.Sats > 40 && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
         smartdelay(10000);
         GPS_aquisition();
         EPS_aquisition();
         }
-      if(MyData.Vbat <= 587)
+      if(MyData.Vbat <= Vbat_min)
         estado = SEGUR;
         else 
         estado = OPER_D;
@@ -158,7 +162,7 @@ void loop(){ //programa principal
       E32.SetMode(MODE_POWERDOWN);
       E32.SetTransmitPower(OPT_TP21);
       E32.SaveParameters(TEMPORARY); 
-      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
+      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){ //Mantem operação se dentro de horario e tensão de bateria ok
         delay(4000);
         smartdelay(1000);
         BMP_aquisition();
@@ -166,7 +170,7 @@ void loop(){ //programa principal
         GPS_aquisition();
         TMP_aquisition();
         FIL_print();
-        if (MyData.Minute != min_ant) //envia dados pelo COMM
+        if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
           {
           E32.SetMode(MODE_NORMAL);
           E32.SaveParameters(TEMPORARY);
@@ -185,10 +189,11 @@ void loop(){ //programa principal
             }
           E32.SetMode(MODE_POWERDOWN);
           E32.SaveParameters(TEMPORARY);
+          ultimo_millis = millis(); 
           }
         MyData.CNT ++;
         }
-      if(MyData.Vbat <= 587)
+      if(MyData.Vbat <= Vbat_min)
         estado = SEGUR;
         else 
         estado = OPER_N;
@@ -197,7 +202,7 @@ void loop(){ //programa principal
     
     /*********operacao normal durante a noite**********/
     case OPER_N: {
-      while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > 587){
+      while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
         delay(9000);
         smartdelay(1000);
         BMP_aquisition();
@@ -207,7 +212,7 @@ void loop(){ //programa principal
         FIL_print();
         MyData.CNT ++;
         }
-      if(MyData.Vbat <= 587)
+      if(MyData.Vbat <= Vbat_min)
         estado = SEGUR;
         else 
         estado = OPER_D;
@@ -216,7 +221,7 @@ void loop(){ //programa principal
     
     /**********operacao de seguranca (bateria baixa)**********/
     case SEGUR:{
-     while(MyData.Vbat <= 587){
+     while(MyData.Vbat <= Vbat_min){
         delay (10000);
         EPS_aquisition();
         }
@@ -272,7 +277,7 @@ void GPS_aquisition(){
 
 void EPS_aquisition(){
 
-  MyData.Vbat = 600; //analogRead(AnalogVbat); /*****ATENCAO******/
+  MyData.Vbat = 500; //analogRead(AnalogVbat); 
   MyData.Vpv = analogRead(AnalogVpv);
   
 }
