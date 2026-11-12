@@ -1,7 +1,7 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.4                       */
+/* v1.5                       */
 /* 02/12/2020                 */
 /******************************/ 
 /* Transm 1x/ min             */
@@ -106,7 +106,7 @@ void operacao_voo();
 void setup() {
 
   //inicializa portas seriais
-  Serial.begin(9600); //**FOR DEBUG ONLY**
+  //Serial.begin(9600); //**FOR DEBUG ONLY**
   ESerial.begin(9600);
   serialGPS.begin(9600);
 
@@ -164,7 +164,7 @@ void loop(){ //programa principal
     
     /******* operacao normal durante o dia *******/
     case OPER_D:{ 
-      
+      min_ant = MyData.Minute;
       while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
         //aguarda tempo para proxima transmissao
         EPS_aquisition();
@@ -175,9 +175,11 @@ void loop(){ //programa principal
         FIL_print();
         //envia dados pelo COMM
         if (MyData.Minute != min_ant)
+          {
           E32.SendStruct(&MyData, sizeof(MyData));
+          min_ant = MyData.Minute;
+          }
         MyData.CNT ++;
-        min_ant = MyData.Minute;
         }
       if(MyData.Vbat <= 587)
         estado = SEGUR;
