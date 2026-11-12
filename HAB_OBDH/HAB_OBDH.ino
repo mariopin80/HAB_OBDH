@@ -1,25 +1,26 @@
 /********  HAB_OBDH *************/
-/* IFSP_Boituva                 */
+/*    NAO TESTADO EM HARDWARE   */ 
+/*IFSP_Boituva                  */
 /* Prof. Mario Pin              */
-/* v3.0 Implantacao de watchdog */
-/* 09/04/2026                   */
+/* v3.1 Implantacao de watchdog */
+/* 15/04/2026                   */
 /********** TO DO: **************/
 /* Implantar estados:           */
 /*  DESCIDA e POUSO             */
 /* Evitar travamento de         */
 /*  INICIALIZACAO sem GPS       */
-/* Beacon em SEGURACA           */
+/*                              */
 /********************************/
 
 /***** bibliotecas necessarias *****/
+#include <Adafruit_BMP085.h>
 #include <avr/wdt.h>
+#include <DallasTemperature.h>
+#include <EBYTE.h>
+#include <LowPower.h>
+#include <SdFat.h>
 #include <SoftwareSerial.h>
 #include <TinyGPS.h>
-#include <EBYTE.h>
-#include <DallasTemperature.h>
-#include <Adafruit_BMP085.h>
-#include <SdFat.h>
-#include <LowPower.h>
 
 /***** define flags de watchdog *****/
 #define WD_SET 0xAA
@@ -33,8 +34,8 @@
 #define LORA_AUX -1
 
 /***** define as portas do GNSS *****/
-#define GNSS_RX 8
 #define GNSS_TX 9
+#define GNSS_RX 8
 
 /***** define pino de controle do cartao SD *****/
 #define CS_SD 10
@@ -47,14 +48,15 @@
 #define AnalogVpv A0
 
 /***** define constantes do sistema *****/
-#define Vbat_min 390                  //tensao minima da bateria 5,3V
+#define Vbat_min 390                  //tensao minima da bateria para entrar no SAFE 5,3V
+#define Vbat_recovery 401             //tensão minima da bateria para voltar do SAFE 5,45
 #define seaLevelPressure_hPa 1013.00  //pressao no nivel do mar @@@Ajustar na data de lançamento@@@
 
 /***** cria os possiveis estados de operacao *****/
-enum Estados {INICIALIZACAO, OPER_1, NOITE, SEGURANCA};
+enum Estados {STARTUP, CLIMB, DESCENT, LAND, NIGHT, SAFE};
 
 /***** define estado inicial *****/
-Estados estado = INICIALIZACAO;
+Estados estado = STARTUP;
 
 /***** cria portas seriais para COMM e GNSS *****/
 SoftwareSerial UART_COMM (COMM_RX, COMM_TX); //RX, TX
@@ -77,60 +79,61 @@ SdFile LogFILE;
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensortemp(&oneWire);
 
-
-
 /***** struct para criar pacote de transmissao de dados *****/
 struct DATA {
-  long Latitude;
-  long Longitude;
-  unsigned short Altitude;
-  float Speed;
-  unsigned short Heading;
-  byte Hour;
-  byte Minute;
-  byte Second;
-  byte Day;
-  byte Month;
-  int Year;
-  unsigned long Age;
-  unsigned long HDOP;
-  unsigned short Sats;
-  short Temp1;
-  short Temp2;
-  short Temp3;
-  short Temp_BMP180;
-  long Pressure;
-  unsigned short Baro_Alt;
-  unsigned short Vbat;
-  unsigned short Vpv;
-  unsigned short CNT;
+  int32_t Latitude;        
+  int32_t Longitude;       
+  uint16_t Altitude;       
+  uint16_t Speed;         
+  uint16_t Heading;       
+  uint8_t Hour;          
+  uint8_t Minute;        
+  uint8_t Second;        
+  uint8_t Day;          
+  uint8_t Month;        
+  int16_t Year;           
+  uint32_t Age;           
+  uint32_t HDOP;          
+  uint16_t Sats;         
+  int16_t Temp1;        
+  int16_t Temp2;         
+  int16_t Temp3;          
+  int16_t Temp_BMP180;    
+  int32_t Pressure;       
+  uint16_t Baro_Alt;       
+  uint16_t Vbat;          
+  uint16_t Vpv;           
+  uint16_t CNT;
 };
-
 DATA MyData;
 
 /***** variaveis de watchdog *****/
-volatile byte WDT_TMP;
-volatile byte WDT_BMP;
-volatile byte WDT_GPS;
-volatile byte WDT_EPS;
-volatile byte WDT_FIL;
+volatile uint8_t WDT_TMP = WD_RST;
+volatile uint8_t WDT_BMP = WD_RST;
+volatile uint8_t WDT_GPS = WD_RST;
+volatile uint8_t WDT_EPS = WD_RST;
+volatile uint8_t WDT_FIL = WD_RST;
 
 /***** variaveis globais *****/
-byte Hundredths;
 uint8_t deviceCount;
-byte min_ant;
-unsigned long ultimo_millis = millis();
+uint8_t min_ant;
+uint32_t ultimo_millis = 0;        
+int32_t altitude_anterior_cm = 0;
+int32_t altitude_maxima_cm = 0;
 
 /***** array de configuração da COMM *****/
-byte Lo_P[] = {0xC2, 0x00, 0x00, 0x18, 0xA, 0x47};
-byte Hi_P[] = {0xC2, 0x00, 0x00, 0x18, 0xA, 0x44};
+const uint8_t Lo_P[] = {0xC2, 0x00, 0x00, 0x18, 0xA, 0x47};
+const uint8_t Hi_P[] = {0xC2, 0x00, 0x00, 0x18, 0xA, 0x44};
 
 /***** funcoes de transmissao *****/
 void LoRa_LoPWR();
 void LoRa_HiPWR();
 
 /***** funcao de espera inteligente *****/
-static void smartdelay(unsigned long ms);
+static void smartdelay(uint32_t ms);
+
+/***** funcao de aquisição de todos os dados *****/
+void ALL_Data_aquisition();
 
 /***** funcoes para aquisicao de dados dos diversos subsistemas *****/
 void TMP_aquisition();
@@ -144,13 +147,6 @@ void FIL_print();
 /***** inicializacao dos subsistemas *****/
 void setup() {
 
-  /***** Garante que as flags iniciam em estado seguro *****/
-  WDT_TMP = WD_RST;
-  WDT_BMP = WD_RST;
-  WDT_GPS = WD_RST;
-  WDT_EPS = WD_RST;
-  WDT_FIL = WD_RST;
-
   /***** Ativa o Watchdog de Hardware *****/
   wdt_enable(WDTO_8S);
   
@@ -160,7 +156,7 @@ void setup() {
 
   /***** inicializa COMM *****/
   E32.init();
-  digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
+  digitalWrite(LORA_M0, HIGH); digitalWrite(LORA_M1, HIGH); delay(100);
   UART_COMM.write(Lo_P, sizeof(Lo_P)); delay(100);
 
   /***** inicializa sensores de temperatura *****/
@@ -185,151 +181,141 @@ void setup() {
 void loop() {
   
   switch (estado){
-    
     /*******inicializacao do sistema********/
-    case INICIALIZACAO:{  
-      smartdelay(2000);
+    case STARTUP: {  
       
-      WDT_GPS = WD_SET;
-      WDT_EPS = WD_SET;
-
-      GPS_aquisition();
-      EPS_aquisition();      
-      while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){ 
+      do {
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
-        
         wdt_enable(WDTO_8S); 
-        
         smartdelay(2000);
-        
-        // Seta as flags antes de ler
-        WDT_BMP = WD_SET;
-        WDT_EPS = WD_SET;
-        WDT_GPS = WD_SET;
-        WDT_TMP = WD_SET;
-        
-        BMP_aquisition();
-        EPS_aquisition();
-        GPS_aquisition();
-        TMP_aquisition();
-        
-        // ADICIONADO: Reseta o Watchdog enquanto espera o GPS!
+        ALL_Data_aquisition();
+        LoRa_LoPWR();
         watchdog_check(); 
-        }
-      if(MyData.Vbat <= Vbat_min)
-        estado = SEGURANCA;
-        else 
-        estado = OPER_1;
+        } while (MyData.Sats < 4 && MyData.Vbat > Vbat_min);
+         
+      if (MyData.Vbat <= Vbat_min) {
+       estado = SAFE;
+      } 
+      else { 
+       estado = CLIMB;
+      }
       break;
     }
     
-    /******* operacao normal durante o dia *******/
-    case OPER_1:{ 
+    /******* operacao normal durante a subida *******/
+    case CLIMB:{ 
+      
       smartdelay(2000);
       min_ant = MyData.Minute;
       ultimo_millis = millis();
+      
       while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 21 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
-
         wdt_enable(WDTO_8S);
-        
         smartdelay(2000);
-        
-        WDT_TMP = WD_SET;
-        WDT_BMP = WD_SET;
-        WDT_GPS = WD_SET;
-        WDT_EPS = WD_SET;
+        ALL_Data_aquisition();
         WDT_FIL = WD_SET;
-        
-        TMP_aquisition();
-        BMP_aquisition();
-        GPS_aquisition();
-        EPS_aquisition();
         FIL_print();
         if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
           {
+          min_ant = MyData.Minute;
+          ultimo_millis = millis();
           if (MyData.Minute % 10 == 0)   //transmite 30dB
             {
             LoRa_HiPWR();
-            min_ant = MyData.Minute;
             }
            else                          //transmite 20dB
             {            
             LoRa_LoPWR();
-            min_ant = MyData.Minute;
             }
-          ultimo_millis = millis(); 
           }
         MyData.CNT ++;
         watchdog_check();
         }
       if(MyData.Vbat <= Vbat_min)
-        estado = SEGURANCA;
+        estado = SAFE;
         else 
-        estado = NOITE;
+        estado = NIGHT;
       break;
     }
-    
+    /******* operacao normal durante a descida *******/
+    case DESCENT:{
+
+      break;
+    }
+
+    /******* operacao normal apos o pouso *******/
+    case LAND:{
+
+      break;
+    }
     /*********operacao normal durante a noite**********/
-    case NOITE: {
+    case NIGHT: {
       smartdelay(2000);
       while((MyData.Hour >= 21 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
-
         wdt_enable(WDTO_8S);
-        
         smartdelay(2000);
-        
-        WDT_TMP = WD_SET;
-        WDT_BMP = WD_SET;
-        WDT_GPS = WD_SET;
-        WDT_EPS = WD_SET;
+        ALL_Data_aquisition();
         WDT_FIL = WD_SET;
-        
-        TMP_aquisition();
-        BMP_aquisition();
-        GPS_aquisition();
-        EPS_aquisition();
         FIL_print();
         MyData.CNT ++;
         watchdog_check();
         }
       if(MyData.Vbat <= Vbat_min)
-        estado = SEGURANCA;
+        estado = SAFE;
         else 
-        estado = OPER_1;
+        estado = CLIMB;
       break;
     }
     
     /**********operacao de seguranca (bateria baixa)**********/
-    case SEGURANCA:{
-     smartdelay(2000);
-     while(MyData.Vbat <= Vbat_min){
+    case SAFE:{
+
+     int ciclos_dormindo = 0; // Contador para o beacon
+     
+     while(MyData.Vbat <= Vbat_recovery){
         LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
-
         wdt_enable(WDTO_8S);
-        
         WDT_EPS = WD_SET;
-
         EPS_aquisition();
-        watchdog_check();
+        ciclos_dormindo++;
+        if (ciclos_dormindo >= 150) {
+          smartdelay(2000); 
+          ALL_Data_aquisition();
+          LoRa_LoPWR(); 
+          ciclos_dormindo = 0; 
         }
-      estado = OPER_1;
-      break;
+        watchdog_check();
       }
+      smartdelay(2000);
+      estado = STARTUP;
+      break;
     }
-                   
+  }
 }
 
 /********* Funcoes auxiliares *******************/
 
-static void smartdelay(unsigned long ms)
+static void smartdelay(uint32_t ms)
 {
-  unsigned long start = millis();
+  uint32_t start = millis();
   while (millis() - start < ms){
     if (UART_GNSS.available())
       gps.encode(UART_GNSS.read());
   } 
+}
+
+void ALL_Data_aquisition() {
+  WDT_TMP = WD_SET;
+  WDT_BMP = WD_SET;
+  WDT_GPS = WD_SET;
+  WDT_EPS = WD_SET;
+
+  TMP_aquisition();
+  BMP_aquisition();
+  GPS_aquisition();
+  EPS_aquisition();
 }
 
 void TMP_aquisition() {
@@ -354,18 +340,32 @@ void BMP_aquisition() {
 }
 
 void GPS_aquisition() {
+  
+  uint8_t Hundredths;
 
   /***** carrega dados de GPS *****/
+  int32_t lat, lon;
   gps.crack_datetime(&MyData.Year, &MyData.Month, &MyData.Day, &MyData.Hour, &MyData.Minute, &MyData.Second, &Hundredths, &MyData.Age);
-  gps.get_position(&MyData.Latitude, &MyData.Longitude, &MyData.Age);
-  MyData.Altitude = gps.altitude() / 100;
-  if (gps.course() <= 36000)
-    MyData.Heading = gps.course() / 100;
-  else
-    MyData.Heading = 0;
-  MyData.Speed = gps.f_speed_kmph();
-  MyData.HDOP = gps.hdop();
-  MyData.Sats = gps.satellites();
+  gps.get_position(&lat, &lon, &MyData.Age);
+  MyData.Latitude = (lat == TinyGPS::GPS_INVALID_ANGLE) ? 0 : lat;
+  MyData.Longitude = (lon == TinyGPS::GPS_INVALID_ANGLE) ? 0 : lon;
+  
+  int32_t nova_altitude_cm = gps.altitude();
+  int32_t variacao_cm = abs(nova_altitude_cm - altitude_anterior_cm);
+  if (nova_altitude_cm >= -50000 && nova_altitude_cm <= 4500000) {  //verifica se valor de altitude não é impossível
+    if (variacao_cm <= 100000 || altitude_anterior_cm == 0) {  
+      altitude_anterior_cm = nova_altitude_cm;
+      if (nova_altitude_cm > altitude_maxima_cm) {
+        altitude_maxima_cm = nova_altitude_cm;
+      }
+      MyData.Altitude = nova_altitude_cm / 100;
+    }
+  }
+  
+  MyData.HDOP = min(gps.hdop(), 9999);
+  MyData.Heading = (gps.course() > 36000) ? 0 : (gps.course() / 100);
+  MyData.Speed = (gps.speed() == TinyGPS::GPS_INVALID_SPEED) ? 0 : (gps.speed() / 100);
+  MyData.Sats = (gps.satellites() == TinyGPS::GPS_INVALID_SATELLITES) ? 0 : gps.satellites();
 
   WDT_GPS = WD_RST;
 }
