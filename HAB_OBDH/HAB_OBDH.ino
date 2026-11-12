@@ -1,12 +1,12 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.7b                      */
-/* 05/12/2020                 */
+/* v1.8                       */
+/* 29/12/2020                 */
 /******************************/ 
 /* Transm 1x/ 1min  20dB      */
 /* Transm 1x/ 10min 30dB      */
-/* Power Down                 */
+/* TX_Power Down              */
 /******************************/
 /* VOLTIMETRO BATERIA OFF     */
 /******************************/
@@ -159,7 +159,7 @@ void loop(){ //programa principal
       E32.SetTransmitPower(OPT_TP21);
       E32.SaveParameters(TEMPORARY); 
       while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > 587){
-        delay (4000);
+        delay(4000);
         smartdelay(1000);
         BMP_aquisition();
         EPS_aquisition();
@@ -175,7 +175,6 @@ void loop(){ //programa principal
             E32.SetTransmitPower(OPT_TP30); 
             E32.SaveParameters(TEMPORARY);  
             E32.SendStruct(&MyData, sizeof(MyData));
-            //delay (5000);
             E32.SetTransmitPower(OPT_TP21); 
             min_ant = MyData.Minute;
             }
@@ -185,7 +184,7 @@ void loop(){ //programa principal
             min_ant = MyData.Minute;
             }
           E32.SetMode(MODE_POWERDOWN);
-          E32.SaveParameters(TEMPORARY); 
+          E32.SaveParameters(TEMPORARY);
           }
         MyData.CNT ++;
         }
@@ -199,7 +198,8 @@ void loop(){ //programa principal
     /*********operacao normal durante a noite**********/
     case OPER_N: {
       while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > 587){
-        smartdelay(10000);
+        delay(9000);
+        smartdelay(1000);
         BMP_aquisition();
         EPS_aquisition();
         GPS_aquisition();
@@ -217,7 +217,7 @@ void loop(){ //programa principal
     /**********operacao de seguranca (bateria baixa)**********/
     case SEGUR:{
      while(MyData.Vbat <= 587){
-        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
+        delay (10000);
         EPS_aquisition();
         }
       estado = INIC;
