@@ -1,12 +1,13 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.9                       */
-/* 13/01/2021                 */
+/* v1.10                      */
+/* 14/01/2021                 */ 
+/*VOO SAIRUS I                */
 /******************************/ 
-/* Transm 1x/ 1min  20dB      */
-/* Transm 1x/ 10min 30dB      */
-/* TX_Power Down              */
+/* Transm 1x/ 1min  20dB  OK  */
+/* Transm 1x/ 10min 30dB  OK  */
+/* TX_Power Down          OK  */
 /* Watchdog transm. OPER_D    */
 /******************************/
 
@@ -16,12 +17,10 @@
 #include <SoftwareSerial.h>
 #include <TinyGPS.h>
 #include <EBYTE.h>
-#include <OneWire.h>
 #include <DallasTemperature.h>
-#include <Wire.h>
 #include <Adafruit_BMP085.h>
 #include <SdFat.h>
-#include <LowPower.h>
+
 
 //cria os possiveis estados de operacao
 enum Estados{INIC, OPER_D, OPER_N, SEGUR};
@@ -51,7 +50,7 @@ SdFile meuArquivo;
 //define sensores de temperatura
 #define ONE_WIRE_BUS 3  //pino de dados
 OneWire oneWire(ONE_WIRE_BUS); 
-DallasTemperature sensors(&oneWire);
+DallasTemperature sensortemp(&oneWire);
 
 //define portas analogicas para medir tensao
 #define AnalogVbat A0
@@ -91,10 +90,14 @@ DATA MyData;
 
 //variaveis globais
 byte Hundredths;
-uint8_t deviceCount = 0;
+uint8_t deviceCount;
 byte min_ant;
 byte PWRDC;
 unsigned long ultimo_millis;
+
+//array de configuração do transceiver
+byte Lo_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x47};
+byte Hi_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x44};
 
 //funcao de espera inteligente
 static void smartdelay(unsigned long ms);
@@ -117,14 +120,18 @@ void setup() {
   //Serial.begin(9600); //**SOMENTE PARA TESTES**
   ESerial.begin(9600);
   serialGPS.begin(9600);
+  
 
   //inicializa COMM
   E32.init(); 
-
+  digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
+  ESerial.write(Lo_P, sizeof(Lo_P)); delay(100);
+  
   //inicializa sensores de temperatura
-  sensors.begin(); 
-  deviceCount = sensors.getDeviceCount();  // localiza os sensores de temperatura
-
+  sensortemp.begin(); 
+  delay(1000);
+  deviceCount = sensortemp.getDeviceCount();  // localiza os sensores de temperatura
+  
   //inicializa sensor de pressao atmosferica
   bmp.begin(); 
   
@@ -133,6 +140,8 @@ void setup() {
   meuArquivo.open("teste3.txt" , O_RDWR | O_CREAT | O_AT_END);
     
   MyData.CNT = 0;
+  
+  
 }
 
 void loop(){ //programa principal
@@ -144,10 +153,11 @@ void loop(){ //programa principal
       smartdelay(3000);
       EPS_aquisition();
       GPS_aquisition();      
-      while(MyData.Sats < 4 && MyData.Sats > 40 && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
+      while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
         smartdelay(10000);
         GPS_aquisition();
         EPS_aquisition();
+        TMP_aquisition();
         }
       if(MyData.Vbat <= Vbat_min)
         estado = SEGUR;
@@ -159,10 +169,7 @@ void loop(){ //programa principal
     /******* operacao normal durante o dia *******/
     case OPER_D:{ 
       min_ant = MyData.Minute;
-      E32.SetMode(MODE_POWERDOWN);
-      E32.SetTransmitPower(OPT_TP21);
-      E32.SaveParameters(TEMPORARY); 
-      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){ //Mantem operação se dentro de horario e tensão de bateria ok
+      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 22 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
         delay(4000);
         smartdelay(1000);
         BMP_aquisition();
@@ -172,23 +179,22 @@ void loop(){ //programa principal
         FIL_print();
         if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
           {
-          E32.SetMode(MODE_NORMAL);
-          E32.SaveParameters(TEMPORARY);
           if (MyData.Minute % 10 == 0) //transmite 30dB
             {
-            E32.SetTransmitPower(OPT_TP30); 
-            E32.SaveParameters(TEMPORARY);  
+            ESerial.write(Hi_P, sizeof(Hi_P)); delay(100);
+            digitalWrite(4, LOW); digitalWrite(5, LOW); delay(100);
             E32.SendStruct(&MyData, sizeof(MyData));
-            E32.SetTransmitPower(OPT_TP21); 
+            digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
+            ESerial.write(Lo_P, sizeof(Lo_P)); delay(100);
             min_ant = MyData.Minute;
             }
            else                          //transmite 20dB
             {            
+            digitalWrite(4, LOW); digitalWrite(5, LOW); delay(100);
             E32.SendStruct(&MyData, sizeof(MyData));
+            digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
             min_ant = MyData.Minute;
             }
-          E32.SetMode(MODE_POWERDOWN);
-          E32.SaveParameters(TEMPORARY);
           ultimo_millis = millis(); 
           }
         MyData.CNT ++;
@@ -245,12 +251,15 @@ static void smartdelay(unsigned long ms)
 
 void TMP_aquisition(){
   //comando para os sensores de temperatura fazerem uma conversao
-  sensors.requestTemperatures(); 
-
+  sensortemp.requestTemperatures();
+  
   // carrega dados dos sensores de temperatura
-  MyData.Temp1 = sensors.getTempCByIndex(0)*10;
-  MyData.Temp2 = sensors.getTempCByIndex(1)*10;
-  MyData.Temp3 = sensors.getTempCByIndex(2)*10;
+  MyData.Temp1 = sensortemp.getTempCByIndex(0)*10;
+  MyData.Temp2 = sensortemp.getTempCByIndex(1)*10;
+  MyData.Temp3 = sensortemp.getTempCByIndex(2)*10;
+  
+
+  
 }
 
 void BMP_aquisition(){
@@ -273,12 +282,13 @@ void GPS_aquisition(){
   MyData.Speed = gps.f_speed_kmph();
   MyData.HDOP = gps.hdop();
   MyData.Sats = gps.satellites();
+  Serial.println (MyData.Sats);
 }
 
 void EPS_aquisition(){
 
-  MyData.Vbat = 500; //analogRead(AnalogVbat); 
-  MyData.Vpv = analogRead(AnalogVpv);
+  MyData.Vbat = analogRead(AnalogVbat); 
+  MyData.Vpv  = analogRead(AnalogVpv);
   
 }
 
