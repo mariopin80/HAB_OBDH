@@ -1,8 +1,8 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v2.4 TESTE                 */
-/* 24/02/2023                 */
+/* v2.5 VOO                   */
+/* 28/02/2023                 */
 /******************************/
 
 /***** bibliotecas necessarias *****/
@@ -31,15 +31,15 @@
 #define ONE_WIRE_BUS 3
 
 /***** define os canais A/D para leitura de tensoes *****/
-#define AnalogVbat A0
-#define AnalogVpv A1
+#define AnalogVbat A1
+#define AnalogVpv A0
 
 /***** define constantes do sistema *****/
-#define Vbat_min 410 //tensao minima da bateria
-#define seaLevelPressure_hPa 1013.00 //pressao no nivel do mar
+#define Vbat_min 390                  //tensao minima da bateria 5,3V
+#define seaLevelPressure_hPa 1013.00  //pressao no nivel do mar
 
 /***** cria os possiveis estados de operacao *****/
-enum Estados {INICIALIZACAO, OPER_1, NOTURNO, SEGURANCA};
+enum Estados {INICIALIZACAO, OPER_1, NOITE, SEGURANCA};
 
 /***** define estado inicial *****/
 Estados estado = INICIALIZACAO;
@@ -156,33 +156,89 @@ void setup() {
 /************** PROGRAMA PRINCIPAL **************/
 void loop() {
   
-  smartdelay(3000);
-  BMP_aquisition();
-  EPS_aquisition();
-  GPS_aquisition();
-  TMP_aquisition();
-  FIL_print();
-  //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
-  if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000)
-    {
-    if (MyData.Minute % 10 == 0) //transmite 30dB em intervalos de 10 minutos
-      {
-      LoRa_HiPWR();
-      min_ant = MyData.Minute;
-      MyData.CNT ++;
-      ultimo_millis = millis();
-      }
-    else                         //transmite 20dB a cada minuto
-      {
-      LoRa_LoPWR();
-      min_ant = MyData.Minute;
-      MyData.CNT ++;
-      ultimo_millis = millis();
-      }
+  switch (estado){
     
-          
+    /*******inicializacao do sistema********/
+    case INICIALIZACAO:{  
+      smartdelay(3000);
+      EPS_aquisition();
+      GPS_aquisition();      
+      while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
+        smartdelay(10000);
+        GPS_aquisition();
+        EPS_aquisition();
+        TMP_aquisition();
+        }
+      if(MyData.Vbat <= Vbat_min)
+        estado = SEGURANCA;
+        else 
+        estado = OPER_1;
+      break;
     }
-        
+    
+    /******* operacao normal durante o dia *******/
+    case OPER_1:{ 
+      min_ant = MyData.Minute;
+      while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 22 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
+        delay(4000);
+        smartdelay(1000);
+        BMP_aquisition();
+        EPS_aquisition();
+        GPS_aquisition();
+        TMP_aquisition();
+        FIL_print();
+        if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
+          {
+          if (MyData.Minute % 10 == 0) //transmite 30dB
+            {
+            LoRa_HiPWR();
+            min_ant = MyData.Minute;
+            }
+           else                          //transmite 20dB
+            {            
+            LoRa_LoPWR();
+            min_ant = MyData.Minute;
+            }
+          ultimo_millis = millis(); 
+          }
+        MyData.CNT ++;
+        }
+      if(MyData.Vbat <= Vbat_min)
+        estado = SEGURANCA;
+        else 
+        estado = NOITE;
+      break;
+    }
+    
+    /*********operacao normal durante a noite**********/
+    case NOITE: {
+      while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
+        delay(90000);
+        smartdelay(1000);
+        BMP_aquisition();
+        EPS_aquisition();
+        GPS_aquisition();
+        TMP_aquisition();
+        FIL_print();
+        MyData.CNT ++;
+        }
+      if(MyData.Vbat <= Vbat_min)
+        estado = SEGURANCA;
+        else 
+        estado = OPER_1;
+      break;
+    }
+    
+    /**********operacao de seguranca (bateria baixa)**********/
+    case SEGURANCA:{
+     while(MyData.Vbat <= Vbat_min){
+        delay (90000);
+        EPS_aquisition();
+        }
+      estado = INICIALIZACAO;
+      break;
+      }
+    }
                    
 }
 
