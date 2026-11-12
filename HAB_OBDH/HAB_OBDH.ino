@@ -1,65 +1,63 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v1.10                      */
-/* 14/01/2021                 */ 
-/*VOO SAIRUS I                */
+/* v2.0.0                     */
+/* 20/10/2021                 */
 /******************************/ 
-/* Transm 1x/ 1min  20dB  OK  */
-/* Transm 1x/ 10min 30dB  OK  */
-/* TX_Power Down          OK  */
-/* Watchdog transm. OPER_D    */
-/******************************/
 
-
-
-//bibliotecas necessarias
+/***** bibliotecas necessarias *****/
 #include <SoftwareSerial.h>
 #include <TinyGPS.h>
 #include <EBYTE.h>
 #include <DallasTemperature.h>
 #include <Adafruit_BMP085.h>
-#include <SdFat.h>
+#include <SdFat.h> //2.1.0
 
-
-//cria os possiveis estados de operacao
-enum Estados{INIC, OPER_D, OPER_N, SEGUR};
-
-//define estado inicial
-Estados estado = INIC;
-
-//cria portas seriais para COMM e GPS
-SoftwareSerial ESerial  (7, 6); //RX, TX
-SoftwareSerial serialGPS(8, 9); //RX, TX
-
-//define pinos de controle da COMM: M0, M1, Aux 
-EBYTE E32(&ESerial, 4, 5, -1);
-
-//define GPS
-TinyGPS gps;
-
-//define sensor de pressao
-#define seaLevelPressure_hPa 1016.00 //pressao no nivel do mar
-Adafruit_BMP085 bmp; 
-
-//define SD Card
-#define chipSelect 10  //SD Card CS
-SdFat sdCard; 
-SdFile meuArquivo;
-
-//define sensores de temperatura
-#define ONE_WIRE_BUS 3  //pino de dados
-OneWire oneWire(ONE_WIRE_BUS); 
-DallasTemperature sensortemp(&oneWire);
-
-//define portas analogicas para medir tensao
+#define COMM_RX 7
+#define COMM_TX 6
+#define GNSS_RX 8
+#define GNSS_TX 9
+#define LORA_M0 4
+#define LORA_M1 5
+#define LORA_AUX -1
+#define CS_SD 10
+#define ONE_WIRE_BUS 3
 #define AnalogVbat A0
 #define AnalogVpv A1
 
-//define minima tensao da bateria
-#define Vbat_min 410
+#define Vbat_min 410 //tensao minima da bateria
+#define seaLevelPressure_hPa 1016.00 //pressao no nivel do mar
 
-// Struct para criar pacote de transmissao de dados
+/***** cria os possiveis estados de operacao *****/
+enum Estados{INICIALIZACAO, NIVEL_1, NIVEL_2, SEGURANCA};
+
+/***** define estado inicial *****/
+Estados estado = INICIALIZACAO;
+
+/***** cria portas seriais para COMM e GNSS *****/
+SoftwareSerial UART_COMM (COMM_RX, COMM_TX); //RX, TX
+SoftwareSerial UART_GNSS (GNSS_RX, GNSS_TX); //RX, TX
+
+/***** define pinos de controle da COMM: M0, M1, Aux *****/ 
+EBYTE E32(&UART_COMM, LORA_M0, LORA_M1, LORA_AUX);
+
+/***** define GPS *****/
+TinyGPS gps;
+
+/***** define sensor de pressao *****/
+Adafruit_BMP085 baro; 
+
+/***** define SD Card *****/
+SdFat SDcard; 
+SdFile LogFILE;
+
+/***** define sensores de temperatura *****/
+OneWire oneWire(ONE_WIRE_BUS); 
+DallasTemperature sensortemp(&oneWire);
+
+
+
+/***** struct para criar pacote de transmissao de dados *****/
 struct DATA {
   long Latitude;
   long Longitude;
@@ -88,164 +86,96 @@ struct DATA {
 
 DATA MyData;
 
-//variaveis globais
+/***** variaveis globais *****/
 byte Hundredths;
 uint8_t deviceCount;
 byte min_ant;
 byte PWRDC;
 unsigned long ultimo_millis;
 
-//array de configuração do transceiver
+/***** array de configuração do transceiver *****/
 byte Lo_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x47};
 byte Hi_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x44};
 
-//funcao de espera inteligente
+/***** funcao de espera inteligente *****/
 static void smartdelay(unsigned long ms);
 
-//funcoes para aquisicao de dados dos diversos subsistemas
+/***** funcoes para aquisicao de dados dos diversos subsistemas *****/
 void TMP_aquisition();
 void BMP_aquisition();
 void GPS_aquisition();
 void EPS_aquisition();
 
-//funcao para gravar dados em arquivo
+/***** funcao para gravar dados em arquivo *****/
 void FIL_print();
 
-//funcao do programa principal
-void operacao_voo();
-
+/***** inicializacao dos subsistemas *****/
 void setup() {
 
-  //inicializa portas seriais
-  //Serial.begin(9600); //**SOMENTE PARA TESTES**
-  ESerial.begin(9600);
-  serialGPS.begin(9600);
+  /***** inicializa portas seriais *****/
+  //Serial.begin(9600); //#### SOMENTE PARA TESTES #####
+  UART_COMM.begin(9600);
+  UART_GNSS.begin(9600);
   
-
-  //inicializa COMM
+  /***** inicializa COMM *****/
   E32.init(); 
   digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
-  ESerial.write(Lo_P, sizeof(Lo_P)); delay(100);
+  UART_COMM.write(Lo_P, sizeof(Lo_P)); delay(100);
   
-  //inicializa sensores de temperatura
+  /***** inicializa sensores de temperatura *****/
   sensortemp.begin(); 
   delay(1000);
   deviceCount = sensortemp.getDeviceCount();  // localiza os sensores de temperatura
   
-  //inicializa sensor de pressao atmosferica
-  bmp.begin(); 
+  /***** inicializa sensor de pressao atmosferica *****/
+  baro.begin(); 
   
-  // Inicializa SD Card e cria arquivo
-  sdCard.begin(chipSelect,SPI_HALF_SPEED);  
-  meuArquivo.open("teste3.txt" , O_RDWR | O_CREAT | O_AT_END);
+  /***** inicializa SD Card e cria arquivo *****/
+  SDcard.begin(CS_SD, SPI_HALF_SPEED);  
+  LogFILE.open("teste3.txt" , O_RDWR | O_CREAT | O_AT_END);
     
   MyData.CNT = 0;
-  
-  
 }
 
-void loop(){ //programa principal
+/************** PROGRAMA PRINCIPAL **************/
+void loop(){ 
   
   switch (estado){
     
-    /*******inicializacao do sistema********/
-    case INIC:{  
-      smartdelay(3000);
-      EPS_aquisition();
-      GPS_aquisition();      
-      while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
-        smartdelay(10000);
-        GPS_aquisition();
-        EPS_aquisition();
-        TMP_aquisition();
-        }
-      if(MyData.Vbat <= Vbat_min)
-        estado = SEGUR;
-        else 
-        estado = OPER_D;
+    /********** inicializacao do sistema ********/
+    case INICIALIZACAO:{  
+      
       break;
     }
     
-    /******* operacao normal durante o dia *******/
-    case OPER_D:{ 
-      min_ant = MyData.Minute;
-      while(MyData.Hour < 22 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 22 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
-        delay(4000);
-        smartdelay(1000);
-        BMP_aquisition();
-        EPS_aquisition();
-        GPS_aquisition();
-        TMP_aquisition();
-        FIL_print();
-        if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
-          {
-          if (MyData.Minute % 10 == 0) //transmite 30dB
-            {
-            ESerial.write(Hi_P, sizeof(Hi_P)); delay(100);
-            digitalWrite(4, LOW); digitalWrite(5, LOW); delay(100);
-            E32.SendStruct(&MyData, sizeof(MyData));
-            digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
-            ESerial.write(Lo_P, sizeof(Lo_P)); delay(100);
-            min_ant = MyData.Minute;
-            }
-           else                          //transmite 20dB
-            {            
-            digitalWrite(4, LOW); digitalWrite(5, LOW); delay(100);
-            E32.SendStruct(&MyData, sizeof(MyData));
-            digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
-            min_ant = MyData.Minute;
-            }
-          ultimo_millis = millis(); 
-          }
-        MyData.CNT ++;
-        }
-      if(MyData.Vbat <= Vbat_min)
-        estado = SEGUR;
-        else 
-        estado = OPER_N;
+    /********** operacao NIVEL 1 ****************/
+    case NIVEL_1:{ 
+      
       break;
     }
     
-    /*********operacao normal durante a noite**********/
-    case OPER_N: {
-      while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
-        delay(9000);
-        smartdelay(1000);
-        BMP_aquisition();
-        EPS_aquisition();
-        GPS_aquisition();
-        TMP_aquisition();
-        FIL_print();
-        MyData.CNT ++;
-        }
-      if(MyData.Vbat <= Vbat_min)
-        estado = SEGUR;
-        else 
-        estado = OPER_D;
+    /********** operacao NIVEL 2 ****************/
+    case NIVEL_2: {
+      
       break;
     }
     
-    /**********operacao de seguranca (bateria baixa)**********/
-    case SEGUR:{
-     while(MyData.Vbat <= Vbat_min){
-        delay (10000);
-        EPS_aquisition();
-        }
-      estado = INIC;
+    /********** operacao de SEGURANCA ***********/
+    case SEGURANCA:{
+     
       break;
-      }
     }
   }
+}
 
-//funcoes 
+/********* Funcoes auxiliares *******************/ 
 
 static void smartdelay(unsigned long ms)
 {
   unsigned long start = millis();
-  do
-  {
-    while (serialGPS.available())
-      gps.encode(serialGPS.read());
+  do{
+    while (UART_GNSS.available())
+      gps.encode(UART_GNSS.read());
   } while (millis() - start < ms);
 }
 
@@ -253,25 +183,22 @@ void TMP_aquisition(){
   //comando para os sensores de temperatura fazerem uma conversao
   sensortemp.requestTemperatures();
   
-  // carrega dados dos sensores de temperatura
+  /***** carrega dados dos sensores de temperatura *****/
   MyData.Temp1 = sensortemp.getTempCByIndex(0)*10;
   MyData.Temp2 = sensortemp.getTempCByIndex(1)*10;
   MyData.Temp3 = sensortemp.getTempCByIndex(2)*10;
-  
-
-  
 }
 
 void BMP_aquisition(){
   
-  MyData.Pressure =  bmp.readPressure();                          //le valor de pressao atmosferica e converte para kPa
-  MyData.Temp_BMP180 = bmp.readTemperature()*10;                  //le temperatura do barometro
-  MyData.Baro_Alt = bmp.readAltitude(seaLevelPressure_hPa * 100); //le altitude barometrica em relacao ao valor de calibracao
+  MyData.Pressure =  baro.readPressure();                          //le valor de pressao atmosferica e converte para kPa
+  MyData.Temp_BMP180 = baro.readTemperature()*10;                  //le temperatura do barometro
+  MyData.Baro_Alt = baro.readAltitude(seaLevelPressure_hPa * 100); //le altitude barometrica em relacao ao valor de calibracao
 }
 
 void GPS_aquisition(){
 
-  //carrega dados de GPS
+  /***** carrega dados de GPS *****/
   gps.crack_datetime(&MyData.Year, &MyData.Month, &MyData.Day, &MyData.Hour, &MyData.Minute, &MyData.Second, &Hundredths, &MyData.Age);
   gps.get_position(&MyData.Latitude, &MyData.Longitude, &MyData.Age);
   MyData.Altitude = gps.altitude()/100;
@@ -282,7 +209,6 @@ void GPS_aquisition(){
   MyData.Speed = gps.f_speed_kmph();
   MyData.HDOP = gps.hdop();
   MyData.Sats = gps.satellites();
-  Serial.println (MyData.Sats);
 }
 
 void EPS_aquisition(){
@@ -294,72 +220,72 @@ void EPS_aquisition(){
 
 void FIL_print(){
 
-  //imprime dados em arquivo no SD Card
-  meuArquivo.print(MyData.CNT);
-  meuArquivo.print(F(";"));
+  /***** imprime dados em arquivo no SD Card *****/
+  LogFILE.print(MyData.CNT);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Day);
-  meuArquivo.print(F("/"));
-  meuArquivo.print(MyData.Month);
-  meuArquivo.print(F("/"));
-  meuArquivo.print(MyData.Year);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Day);
+  LogFILE.print(F("/"));
+  LogFILE.print(MyData.Month);
+  LogFILE.print(F("/"));
+  LogFILE.print(MyData.Year);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Hour);
-  meuArquivo.print(F(":"));
-  meuArquivo.print(MyData.Minute);
-  meuArquivo.print(F(":"));
-  meuArquivo.print(MyData.Second);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Hour);
+  LogFILE.print(F(":"));
+  LogFILE.print(MyData.Minute);
+  LogFILE.print(F(":"));
+  LogFILE.print(MyData.Second);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.Age);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Age);
+  LogFILE.print(F(";"));
     
-  meuArquivo.print(MyData.Latitude);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Latitude);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Longitude);
-  meuArquivo.print(F(";"));    
+  LogFILE.print(MyData.Longitude);
+  LogFILE.print(F(";"));    
   
-  meuArquivo.print(MyData.Altitude);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Altitude);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Speed);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Speed);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Heading);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Heading);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.HDOP);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.HDOP);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.Sats);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Sats);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.Temp1);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Temp1);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Temp2);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Temp2);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Temp3);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Temp3);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.Temp_BMP180);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Temp_BMP180);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Pressure);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Pressure);
+  LogFILE.print(F(";"));
   
-  meuArquivo.print(MyData.Baro_Alt);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Baro_Alt);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.Vbat);
-  meuArquivo.print(F(";"));
+  LogFILE.print(MyData.Vbat);
+  LogFILE.print(F(";"));
 
-  meuArquivo.print(MyData.Vpv);
-  meuArquivo.println(F(";"));
+  LogFILE.print(MyData.Vpv);
+  LogFILE.println(F(";"));
     
-  //compila arquivo
-  meuArquivo.flush();
+  /***** grava no cartao SD *****/
+  LogFILE.sync();
 }
