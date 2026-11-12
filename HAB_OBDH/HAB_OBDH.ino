@@ -1,8 +1,8 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v2.3 DEBUG                 */
-/* 07/02/2023                 */
+/* v2.4 TESTE                 */
+/* 24/02/2023                 */
 /******************************/
 
 /***** bibliotecas necessarias *****/
@@ -91,7 +91,7 @@ struct DATA {
   unsigned short Baro_Alt;
   unsigned short Vbat;
   unsigned short Vpv;
-  unsigned long CNT;
+  unsigned short CNT;
 };
 
 DATA MyData;
@@ -100,8 +100,7 @@ DATA MyData;
 byte Hundredths;
 uint8_t deviceCount;
 byte min_ant;
-byte PWRDC;
-unsigned long ultimo_millis;
+unsigned long ultimo_millis = millis();
 
 /***** array de configuração do transceiver *****/
 byte Lo_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x47};
@@ -128,19 +127,14 @@ void UART_print();
 void setup() {
 
   /***** inicializa portas seriais *****/
-  Serial.begin(115200); //#### SOMENTE PARA TESTES #####
   UART_COMM.begin(9600);
   UART_GNSS.begin(9600);
 
-  Serial.println("Inicializando radio.");
-  
   /***** inicializa COMM *****/
   E32.init();
   digitalWrite(4, HIGH); digitalWrite(5, HIGH); delay(100);
   UART_COMM.write(Lo_P, sizeof(Lo_P)); delay(100);
 
-  Serial.println("Inicializando sensores de temperatura.");
-  
   /***** inicializa sensores de temperatura *****/
   sensortemp.begin();
   delay(1000);
@@ -149,12 +143,8 @@ void setup() {
   /***** seleciona referencia externa *****/
   analogReference(EXTERNAL);
 
-  Serial.println("Inicializando braometro.");
-  
   /***** inicializa sensor de pressao atmosferica *****/
   baro.begin();
-
-  Serial.println("Inicializando cartao SD.");
 
   /***** inicializa SD Card e cria arquivo *****/
   SDcard.begin(CS_SD, SPI_HALF_SPEED);
@@ -165,18 +155,35 @@ void setup() {
 
 /************** PROGRAMA PRINCIPAL **************/
 void loop() {
-  smartdelay(5000);
+  
+  smartdelay(3000);
   BMP_aquisition();
   EPS_aquisition();
   GPS_aquisition();
   TMP_aquisition();
   FIL_print();
-  UART_print();
-
-  MyData.CNT = MyData.CNT+1;
-  
-  LoRa_LoPWR();
-             
+  //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
+  if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000)
+    {
+    if (MyData.Minute % 10 == 0) //transmite 30dB em intervalos de 10 minutos
+      {
+      LoRa_HiPWR();
+      min_ant = MyData.Minute;
+      MyData.CNT ++;
+      ultimo_millis = millis();
+      }
+    else                         //transmite 20dB a cada minuto
+      {
+      LoRa_LoPWR();
+      min_ant = MyData.Minute;
+      MyData.CNT ++;
+      ultimo_millis = millis();
+      }
+    
+          
+    }
+        
+                   
 }
 
 /********* Funcoes auxiliares *******************/
@@ -313,44 +320,4 @@ void FIL_print() {
 
   /***** grava no cartao SD *****/
   LogFILE.sync();
-}
-
-void UART_print(){
-  Serial.println(F("------------------------------------------"));
-  Serial.println(MyData.CNT);
-  
-  Serial.print(MyData.Day);
-  Serial.print(F("/"));
-  Serial.print(MyData.Month);
-  Serial.print(F("/"));
-  Serial.println(MyData.Year);
-  
-  Serial.print(MyData.Hour);
-  Serial.print(F(":"));
-  Serial.print(MyData.Minute);
-  Serial.print(F(":"));
-  Serial.println(MyData.Second);
-  
-  Serial.print(F("Age:")); Serial.println(MyData.Age);
-
-  Serial.print(F("Lat:")); Serial.println(MyData.Latitude);
-  Serial.print(F("Lon:")); Serial.println(MyData.Longitude);
-  Serial.print(F("Alt:")); Serial.println(MyData.Altitude);
-
-  Serial.print(F("SPD:")); Serial.println(MyData.Speed);
-  Serial.print(F("HDG:")); Serial.println(MyData.Heading);
-
-  Serial.print(F("HDOP:")); Serial.println(MyData.HDOP);
-  Serial.print(F("Sats:")); Serial.println(MyData.Sats);
-
-  Serial.print(F("Temp1:")); Serial.println(MyData.Temp1);
-  Serial.print(F("Temp2:")); Serial.println(MyData.Temp2);
-  Serial.print(F("Temp3:")); Serial.println(MyData.Temp3);
-
-  Serial.print(F("Tbar:")); Serial.println(MyData.Temp_BMP180);
-  Serial.print(F("Pres:")); Serial.println(MyData.Pressure);
-  Serial.print(F("AltB:")); Serial.println(MyData.Baro_Alt);
-
-  Serial.print(F("Vbt:")); Serial.println(MyData.Vbat);
-  Serial.print(F("Vpv:")); Serial.println(MyData.Vpv);
 }
