@@ -1,8 +1,8 @@
 /********  HAB_OBDH ***********/
 /* IFSP_Boituva               */
 /* Prof. Mario Pin            */
-/* v2.5 VOO                   */
-/* 28/02/2023                 */
+/* v2.6 VOO                   */
+/* 07/03/2023                 */
 /******************************/
 
 /***** bibliotecas necessarias *****/
@@ -12,6 +12,7 @@
 #include <DallasTemperature.h>
 #include <Adafruit_BMP085.h>
 #include <SdFat.h>
+#include <LowPower.h>
 
 /***** define as portas da COMM *****/
 #define LORA_M0 4
@@ -102,7 +103,7 @@ uint8_t deviceCount;
 byte min_ant;
 unsigned long ultimo_millis = millis();
 
-/***** array de configuração do transceiver *****/
+/***** array de configuração da COMM *****/
 byte Lo_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x47};
 byte Hi_P[] = {0xC2, 0x00, 0x00, 0x1A, 0x15, 0x44};
 
@@ -121,7 +122,6 @@ void EPS_aquisition();
 
 /***** funcao para gravar dados em arquivo *****/
 void FIL_print();
-void UART_print();
 
 /***** inicializacao dos subsistemas *****/
 void setup() {
@@ -140,7 +140,7 @@ void setup() {
   delay(1000);
   deviceCount = sensortemp.getDeviceCount();  // localiza os sensores de temperatura
 
-  /***** seleciona referencia externa *****/
+  /***** seleciona referencia de tensão externa 3,3V *****/
   analogReference(EXTERNAL);
 
   /***** inicializa sensor de pressao atmosferica *****/
@@ -164,7 +164,8 @@ void loop() {
       EPS_aquisition();
       GPS_aquisition();      
       while((MyData.Sats < 4|| MyData.Sats > 40) && MyData.Vbat > Vbat_min){  //Aguarda pelo menos 4 satélites GPS para operação normal ou se Vbat baixo entra em modo de segurança
-        smartdelay(10000);
+        LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
+        smartdelay(2000);
         GPS_aquisition();
         EPS_aquisition();
         TMP_aquisition();
@@ -180,8 +181,8 @@ void loop() {
     case OPER_1:{ 
       min_ant = MyData.Minute;
       while(MyData.Hour < 21 && MyData.Hour >= 11 && MyData.Vbat > Vbat_min){  //se hora entre 22 e 11 UTC -> Operação noturna. Se Vbat baixo -> modo de segurança
-        delay(4000);
-        smartdelay(1000);
+        LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_OFF);
+        smartdelay(2000);
         BMP_aquisition();
         EPS_aquisition();
         GPS_aquisition();
@@ -189,7 +190,7 @@ void loop() {
         FIL_print();
         if (MyData.Minute != min_ant || (millis() - ultimo_millis) > 90000) //envia dados pelo COMM a cada minuto do GPS ou a cada 1'30 se sem sinal de GPS
           {
-          if (MyData.Minute % 10 == 0) //transmite 30dB
+          if (MyData.Minute % 10 == 0)   //transmite 30dB
             {
             LoRa_HiPWR();
             min_ant = MyData.Minute;
@@ -213,8 +214,8 @@ void loop() {
     /*********operacao normal durante a noite**********/
     case NOITE: {
       while((MyData.Hour >= 22 || MyData.Hour < 11) && MyData.Vbat > Vbat_min){
-        delay(90000);
-        smartdelay(1000);
+        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
+        smartdelay(2000);
         BMP_aquisition();
         EPS_aquisition();
         GPS_aquisition();
@@ -232,7 +233,7 @@ void loop() {
     /**********operacao de seguranca (bateria baixa)**********/
     case SEGURANCA:{
      while(MyData.Vbat <= Vbat_min){
-        delay (90000);
+        LowPower.powerDown(SLEEP_8S, ADC_OFF, BOD_OFF);
         EPS_aquisition();
         }
       estado = INICIALIZACAO;
